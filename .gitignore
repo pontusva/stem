@@ -39,6 +39,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Circle entity secret recovery file (never commit)
+# Circle entity secret recovery files (never commit) — covers our script's name,
+# the Circle SDK's default recovery_file_<timestamp>.dat, and any other variant.
 circle-entity-secret-recovery.dat
+recovery_file_*.dat
+*recovery*.dat
 *-recovery-file.json

@@ -19,10 +19,9 @@
 import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service-client";
+import { getBaseUrl } from "@/lib/utils/base-url";
 
-const baseUrl = process.env.VERCEL_URL
-  ? process.env.VERCEL_URL
-  : "http://localhost:3000";
+const baseUrl = getBaseUrl();
 
 /**
  * Advance royalty payouts as their Circle transfers settle. When every payout

@@ -18,10 +18,9 @@
 
 import { createSupabaseServerClient } from "@/lib/supabase/server-client";
 import { NextResponse } from "next/server";
+import { getBaseUrl } from "@/lib/utils/base-url";
 
-const baseUrl = process.env.NEXT_PUBLIC_VERCEL_URL
-  ? process.env.NEXT_PUBLIC_VERCEL_URL
-  : "http://localhost:3000";
+const baseUrl = getBaseUrl();
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);

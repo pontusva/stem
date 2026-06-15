@@ -23,10 +23,9 @@ import { createClient } from "@/lib/utils/supabase/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/service-client";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { getBaseUrl } from "@/lib/utils/base-url";
 
-const baseUrl = process.env.NEXT_PUBLIC_VERCEL_URL
-  ? process.env.NEXT_PUBLIC_VERCEL_URL
-  : "http://localhost:3000";
+const baseUrl = getBaseUrl();
 
 export const signUpAction = async (formData: FormData) => {
   const email = formData.get("email")?.toString();

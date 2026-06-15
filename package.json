@@ -4,6 +4,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "generate-entity-secret": "node generate-entity-secret.mjs",
     "generate-wallet": "node generate-wallet.mjs"
   },
   "dependencies": {

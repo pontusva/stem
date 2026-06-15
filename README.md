@@ -176,7 +176,6 @@ Copy `.env.example` to `.env.local` and fill in the required values:
 | `CIRCLE_ENTITY_SECRET` | Server-side | Circle entity secret for signing transactions. |
 | `CIRCLE_BLOCKCHAIN` | Server-side | Blockchain network identifier (e.g. `ARC-TESTNET`). Auto-generated. |
 | `ANTHROPIC_API_KEY` | Server-side | Claude — validates delivered work before release. |
-| `OPENAI_API_KEY` | Server-side | Optional / legacy (validation now uses Claude). |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Server-side | Google sign-in (optional). |
 
 ## Demo Script
@@ -198,6 +197,15 @@ This sample application:
 - Handles secrets via environment variables
 - Verifies webhook signatures
 - Is **not** intended for production use without modification
+
+> **TODO (post-hackathon): dependency audit.** `npm audit` reports advisories in
+> transitive deps (axios, @xmldom/xmldom, bn.js, brace-expansion, @babel/runtime)
+> — all DoS/SSRF/prototype-pollution outside this app's demo attack surface, so
+> deferred for the hackathon. To remediate: run `npm audit fix` (non-breaking)
+> first and verify the app, then handle `@supabase/auth-js` separately — it only
+> resolves via `npm audit fix --force`, which bumps `@supabase/supabase-js`
+> outside the stated range and can break auth. Do that on its own branch and test
+> the login flow before merging.
 
 See also [`ROYALTY_PROTOCOL.md`](ROYALTY_PROTOCOL.md) for the full protocol design,
 [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md), and [`SECURITY.md`](SECURITY.md).

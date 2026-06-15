@@ -27,6 +27,7 @@ import "./globals.css";
 import { ThemeSwitcher } from "@/components/theme-switcher";
 import { ServiceWorkerKiller } from "@/components/sw-killer";
 import { StemCloud } from "@/components/kawaii/stem-cloud";
+import { getBaseUrl } from "@/lib/utils/base-url";
 
 const nunito = Nunito({
   subsets: ["latin"],
@@ -34,9 +35,7 @@ const nunito = Nunito({
   display: "swap",
 });
 
-const defaultUrl = process.env.NEXT_PUBLIC_VERCEL_URL
-  ? process.env.NEXT_PUBLIC_VERCEL_URL
-  : "http://localhost:3000";
+const defaultUrl = getBaseUrl();
 
 export const metadata = {
   metadataBase: new URL(defaultUrl),
