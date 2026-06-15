@@ -36,7 +36,20 @@ interface Props {
 export const CopyButton: FunctionComponent<Props> = (props) => {
   const [shouldShowTooltip, setShouldShowTooltip] = useState(false);
 
-  const simulateTooltipOpening = async () => {
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(props.text);
+    } catch {
+      // Fallback for browsers/contexts that block the async clipboard API.
+      const textarea = document.createElement("textarea");
+      textarea.value = props.text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
     setShouldShowTooltip(true);
     await sleep(700);
     setShouldShowTooltip(false);
@@ -46,11 +59,8 @@ export const CopyButton: FunctionComponent<Props> = (props) => {
     <TooltipProvider>
       <Tooltip open={shouldShowTooltip}>
         <TooltipTrigger asChild>
-          <Button onClick={simulateTooltipOpening}>
-            <Copy
-              className="h-4 w-4"
-              onClick={() => navigator.clipboard.writeText(props.text)}
-            />
+          <Button type="button" onClick={copy}>
+            <Copy className="h-4 w-4" />
           </Button>
         </TooltipTrigger>
         <TooltipContent>
