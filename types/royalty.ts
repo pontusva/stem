@@ -43,6 +43,7 @@ export interface Work {
   work_type: WorkType;
   file_path: string | null;
   file_url: string | null;
+  duration_seconds: number | null;
   parent_work_id: string | null;
   license_price: number;
   status: string;

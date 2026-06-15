@@ -57,11 +57,20 @@ export const createWorksService = (supabase: SupabaseClient) => ({
   async updateWorkFile(
     workId: string,
     filePath: string,
-    fileUrl: string
+    fileUrl: string,
+    durationSeconds?: number | null
   ): Promise<void> {
     const { error } = await supabase
       .from("works")
-      .update({ file_path: filePath, file_url: fileUrl })
+      .update({
+        file_path: filePath,
+        file_url: fileUrl,
+        // Only overwrite duration when we have one (audio); leave it untouched
+        // for non-audio uploads so a re-upload can't clobber it with null.
+        ...(durationSeconds !== undefined
+          ? { duration_seconds: durationSeconds }
+          : {}),
+      })
       .eq("id", workId);
     if (error) throw new Error(`Failed to update work file: ${error.message}`);
   },

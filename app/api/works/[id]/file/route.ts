@@ -17,12 +17,62 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { parseBuffer } from "music-metadata";
 import { createSupabaseServerClient } from "@/lib/supabase/server-client";
 import { createSupabaseServiceClient } from "@/lib/supabase/service-client";
 import { createWorksService } from "@/app/services/works.service";
 import { getCurrentUser } from "@/lib/utils/current-user";
 
 const WORKS_BUCKET = "works-files";
+const STEMS_BUCKET = "stems";
+
+const AUDIO_EXTENSIONS = ["mp3", "wav", "ogg", "flac"];
+
+/**
+ * Audio stems live in their own public "stems" bucket so they can be streamed
+ * from the work detail page; everything else (images, pdfs) stays in works-files.
+ */
+function isAudio(fileName: string, mimeType: string): boolean {
+  if (mimeType.startsWith("audio/")) return true;
+  const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+  return AUDIO_EXTENSIONS.includes(ext);
+}
+
+/**
+ * Parse the file with music-metadata to prove it's genuinely decodable audio
+ * (not just an audio extension/MIME) and pull out its playback duration.
+ * Throws if the bytes aren't a recognizable audio stream.
+ */
+async function validateAudio(
+  file: Blob,
+  fileName: string
+): Promise<{ durationSeconds: number | null }> {
+  const buffer = Buffer.from(await file.arrayBuffer());
+
+  let metadata;
+  try {
+    metadata = await parseBuffer(buffer, {
+      mimeType: file.type || undefined,
+      path: fileName,
+      size: buffer.length,
+    });
+  } catch {
+    throw new Error("File is not a valid audio file");
+  }
+
+  // A real audio stream resolves to a known container/codec.
+  if (!metadata.format.container && !metadata.format.codec) {
+    throw new Error("File is not a valid audio file");
+  }
+
+  const duration = metadata.format.duration;
+  return {
+    durationSeconds:
+      typeof duration === "number" && Number.isFinite(duration)
+        ? Math.round(duration * 1000) / 1000
+        : null,
+  };
+}
 
 /**
  * POST /api/works/[id]/file — upload the work's creative file (multipart form,
@@ -66,9 +116,25 @@ export async function POST(
     const originalName = (file as File).name || "work";
     const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, "_");
     const filePath = `${params.id}/${Date.now()}-${safeName}`;
+    const audio = isAudio(originalName, file.type);
+    const bucket = audio ? STEMS_BUCKET : WORKS_BUCKET;
+
+    // For audio, validate the bytes really are decodable audio (and grab its
+    // duration) before we commit anything to storage.
+    let durationSeconds: number | null | undefined = undefined;
+    if (audio) {
+      try {
+        ({ durationSeconds } = await validateAudio(file, originalName));
+      } catch (err: any) {
+        return NextResponse.json(
+          { error: err.message || "File is not a valid audio file" },
+          { status: 400 }
+        );
+      }
+    }
 
     const { error: uploadError } = await service.storage
-      .from(WORKS_BUCKET)
+      .from(bucket)
       .upload(filePath, file, {
         contentType: file.type || "application/octet-stream",
         upsert: false,
@@ -82,12 +148,20 @@ export async function POST(
     }
 
     const { data: pub } = service.storage
-      .from(WORKS_BUCKET)
+      .from(bucket)
       .getPublicUrl(filePath);
 
-    await worksService.updateWorkFile(params.id, filePath, pub.publicUrl);
+    await worksService.updateWorkFile(
+      params.id,
+      filePath,
+      pub.publicUrl,
+      durationSeconds
+    );
 
-    return NextResponse.json({ filePath, fileUrl: pub.publicUrl }, { status: 201 });
+    return NextResponse.json(
+      { filePath, fileUrl: pub.publicUrl, durationSeconds: durationSeconds ?? null },
+      { status: 201 }
+    );
   } catch (error: any) {
     return NextResponse.json(
       { error: `Failed to upload file: ${error.message}` },

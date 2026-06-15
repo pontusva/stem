@@ -31,12 +31,14 @@ import { RoyaltyBreakdown, BreakdownRow } from "@/components/royalty-breakdown";
 import { LicenseWorkButton } from "@/components/license-work-button";
 import { ShareWorkButton } from "@/components/share-work-button";
 import { WorkFileUpload } from "@/components/work-file-upload";
+import { AudioPlayer } from "@/components/audio-player";
 import { computeSplitAmounts, formatUsdc, UPSTREAM_SHARE_PCT } from "@/lib/utils/royalty";
 
 export const dynamic = "force-dynamic";
 
 const EXPLORER = "https://testnet.arcscan.app";
 const IMAGE_EXT = ["jpg", "jpeg", "png", "gif", "webp"];
+const AUDIO_EXT = ["mp3", "wav", "ogg", "flac"];
 
 export default async function WorkDetailPage({
   params,
@@ -121,6 +123,7 @@ export default async function WorkDetailPage({
 
   const ext = work.file_url?.split(".").pop()?.toLowerCase() ?? "";
   const isImage = IMAGE_EXT.includes(ext);
+  const isAudio = AUDIO_EXT.includes(ext);
   const hasFile = !!work.file_url;
   const hasContributors = contributors.length > 0;
 
@@ -196,6 +199,8 @@ export default async function WorkDetailPage({
                 alt={work.title}
                 className="max-h-64 w-full rounded-2xl object-contain"
               />
+            ) : isAudio && work.file_url ? (
+              <AudioPlayer src={work.file_url} title={work.title} />
             ) : hasFile ? (
               <a
                 href={work.file_url!}

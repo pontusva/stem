@@ -374,7 +374,7 @@ export function RegisterWorkForm({
             <Input
               id="file"
               type="file"
-              accept="image/*,audio/*,application/pdf,text/plain"
+              accept="image/*,audio/*,.mp3,.wav,.ogg,.flac,application/pdf,text/plain"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             />
           </div>

@@ -61,7 +61,7 @@ export function WorkFileUpload({ workId }: { workId: string }) {
       </p>
       <Input
         type="file"
-        accept="image/*,audio/*,application/pdf,text/plain"
+        accept="image/*,audio/*,.mp3,.wav,.ogg,.flac,application/pdf,text/plain"
         onChange={(e) => setFile(e.target.files?.[0] ?? null)}
       />
       <Button onClick={upload} disabled={uploading || !file} className="w-full">
