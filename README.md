@@ -1,16 +1,77 @@
-# Workflow Escrow Refund Protocol
+# stem — Provenance-Aware Royalty Protocol
 
-Automate escrow-backed freelance agreements with AI-powered work validation using USDC on Arc testnet. This sample application uses Next.js, Supabase, Circle Developer Controlled Wallets, and OpenAI to demonstrate an end-to-end escrow workflow — from contract creation and deposit, through AI-validated deliverable submission, to fund release or refund.
+Register a creative work, declare who made it — **humans *and* AI** — and when the
+work is licensed via on-chain escrow, the released USDC **fans out to every
+contributor by their split**. AI contributors get their own Circle wallet **and**
+an ERC-8004 on-chain identity, and earn USDC like anyone else.
 
-<img width="830" height="467" alt="Escrow agreement dashboard" src="public/screenshot.png" />
+Built on Arc Testnet with Next.js, Supabase, and Circle Developer-Controlled
+Wallets. Escrow runs on the deployed **ERC-8183 AgenticCommerce** job contract;
+royalty fan-out uses Circle wallet-to-wallet USDC transfers. Work deliverables
+are validated by **Claude** before funds are released.
+
+> **Provenance:** This project is built on top of Circle's
+> [Workflow Escrow Refund Protocol](https://github.com/akelani-circle/workflow-escrow-refund-protocol)
+> sample (the Next.js + Supabase + Circle DCW boilerplate). The royalty layer —
+> contributor splits, AI contributors with Circle wallets + ERC-8004 identities,
+> royalty fan-out, the provenance chain, and Claude-based validation — is the work
+> added in this repo.
+
+<img width="830" height="467" alt="stem dashboard" src="public/screenshot.png" />
 
 ## Table of Contents
 
+- [How It Works](#how-it-works)
+- [Architecture](#architecture)
 - [Prerequisites](#prerequisites)
 - [Getting Started](#getting-started)
-- [How It Works](#how-it-works)
 - [Environment Variables](#environment-variables)
-- [User Accounts](#user-accounts)
+- [Demo Script](#demo-script)
+- [Security & Usage Model](#security--usage-model)
+
+## How It Works
+
+- A creator **registers a work** and attaches contributors with royalty
+  `split_pct` (validated to sum to 100%) — contributors can be humans or AI.
+- When an **AI contributor** is added, the app provisions it a
+  [Circle Developer-Controlled Wallet](https://developers.circle.com/wallets/dev-controlled)
+  **and** registers an **ERC-8004 on-chain identity**, so the AI is a first-class,
+  payable participant.
+- A buyer **licenses** a work, which creates and budgets one
+  **ERC-8183 AgenticCommerce** escrow job on **Arc Testnet** (USDC is the native
+  gas token). The agent wallet is the on-chain `provider` + `evaluator`.
+- On release, **Claude** validates the delivered work against the agreement
+  criteria; on success the agent `complete`s the job and the escrowed USDC
+  **fans out** to each contributor by their split via Circle transfers.
+- **Webhook signature verification** marks each royalty transfer COMPLETE and
+  closes the license once all settle.
+- **Real-time UI updates** are powered by Supabase Realtime subscriptions — payout
+  statuses flip live as transfers settle.
+- Registering a **derivative work** links back to its source, building an on-chain
+  **provenance chain**.
+
+## Architecture
+
+| Layer | What it does |
+| --- | --- |
+| `works`, `contributors` | A work and its human/AI contributors with royalty `split_pct` (sum = 100%). AI contributor wallets live in `wallets` with `profile_id = NULL`. |
+| `licenses` | One ERC-8183 escrow job per license. The agent wallet is on-chain `provider` + `evaluator`. |
+| `royalty_payments` | One row per contributor per release; tracks each Circle transfer to COMPLETE. |
+
+### Arc Testnet contracts (see `lib/utils/arc.ts`)
+
+```
+USDC                 0x3600000000000000000000000000000000000000
+ERC-8183 commerce    0x0747EEf0706327138c69792bF28Cd525089e4583
+ERC-8004 identity    0x8004A818BFB912233c491871b3d84c89A494BD9e
+```
+
+### License lifecycle
+
+```
+INITIATED → JOB_CREATED → BUDGETED → APPROVED → FUNDED
+          → SUBMITTED → COMPLETED → SPLITTING → CLOSED
+```
 
 ## Prerequisites
 
@@ -18,16 +79,17 @@ Automate escrow-backed freelance agreements with AI-powered work validation usin
 - **Supabase CLI** — Install via `npm install -g supabase` or see [Supabase CLI docs](https://supabase.com/docs/guides/cli/getting-started)
 - **Docker Desktop** (only if using the local Supabase path) — [Install Docker Desktop](https://www.docker.com/products/docker-desktop/)
 - **[ngrok](https://ngrok.com/)** — For local webhook testing
-- Circle Developer Controlled Wallets **[API key](https://console.circle.com/signin)** and **[Entity Secret](https://developers.circle.com/wallets/dev-controlled/register-entity-secret)**
-- **[OpenAI API key](https://platform.openai.com/api-keys)** — Used for AI-powered work validation
+- Circle Developer Controlled Wallets **[API key](https://console.circle.com/apikeys)** and **[Entity Secret](https://developers.circle.com/wallets/dev-controlled/register-entity-secret)**
+- **[Anthropic API key](https://console.anthropic.com/settings/keys)** — Claude validates delivered work before royalties are released
+- Arc Testnet USDC from the **[Circle Faucet](https://faucet.circle.com)** — funds the agent wallet (on Arc, gas is paid in USDC)
 
 ## Getting Started
 
 1. Clone the repository and install dependencies:
 
    ```bash
-   git clone git@github.com:akelani-circle/workflow-escrow-refund-protocol.git
-   cd workflow-escrow-refund-protocol
+   git clone git@github.com:pontusva/stem.git
+   cd stem
    npm install
    ```
 
@@ -37,17 +99,9 @@ Automate escrow-backed freelance agreements with AI-powered work validation usin
    cp .env.example .env.local
    ```
 
-   Then edit `.env.local` and fill in all required values (see [Environment Variables](#environment-variables) section below). Leave `NEXT_PUBLIC_AGENT_WALLET_ID`, `NEXT_PUBLIC_AGENT_WALLET_ADDRESS`, and `CIRCLE_BLOCKCHAIN` blank — they will be auto-generated in the next step.
+   Then edit `.env.local` and fill in all required values (see [Environment Variables](#environment-variables)). Leave `NEXT_PUBLIC_AGENT_WALLET_ID`, `NEXT_PUBLIC_AGENT_WALLET_ADDRESS`, and `CIRCLE_BLOCKCHAIN` blank — they are auto-generated in step 4.
 
-3. Generate the agent wallet:
-
-   ```bash
-   npm run generate-wallet
-   ```
-
-   This creates a Circle developer-controlled wallet and writes the wallet ID, address, and blockchain values into your `.env.local`.
-
-4. Set up the database — Choose one of the two paths below:
+3. Set up the database — choose one path:
 
    <details>
    <summary><strong>Path 1: Local Supabase (Docker)</strong></summary>
@@ -59,7 +113,7 @@ Automate escrow-backed freelance agreements with AI-powered work validation usin
    npx supabase migration up
    ```
 
-   The output of `npx supabase start` will display the Supabase URL and API keys needed for your `.env.local`.
+   The output of `npx supabase start` displays the Supabase URL and API keys (including the **service role key**) needed for your `.env.local`.
 
    </details>
 
@@ -77,7 +131,17 @@ Automate escrow-backed freelance agreements with AI-powered work validation usin
 
    </details>
 
-5. Start the development server:
+4. Generate the agent wallet:
+
+   ```bash
+   npm run generate-wallet
+   ```
+
+   This creates the Circle developer-controlled **agent wallet** and writes the wallet ID, address, and blockchain values into your `.env.local`.
+
+5. **Fund the agent wallet** with Arc Testnet USDC from <https://faucet.circle.com>. On Arc, gas is paid in USDC, and the agent wallet pays gas for `setBudget`, `submit`, `complete`, ERC-8004 `register`, and every royalty transfer.
+
+6. Start the development server:
 
    ```bash
    npm run dev
@@ -85,7 +149,7 @@ Automate escrow-backed freelance agreements with AI-powered work validation usin
 
    The app will be available at `http://localhost:3000`.
 
-6. Set up Circle Webhooks (for local development):
+7. Set up Circle Webhooks (for local development):
 
    In a separate terminal, expose your local server:
 
@@ -93,81 +157,47 @@ Automate escrow-backed freelance agreements with AI-powered work validation usin
    ngrok http 3000
    ```
 
-   Copy the HTTPS URL from ngrok and configure a webhook in the Circle Console:
-   - Navigate to [Circle Console → Webhooks](https://console.circle.com/webhooks)
-   - Add a new webhook endpoint: `https://your-ngrok-url.ngrok.io/api/webhooks/circle`
-   - Keep ngrok running while developing to receive webhook events
-
-## How It Works
-
-- Built with [Next.js](https://nextjs.org/) and [Supabase](https://supabase.com/)
-- Uses [Circle Developer Controlled Wallets](https://developers.circle.com/wallets/dev-controlled) for USDC escrow transactions on Arc testnet
-- Smart contracts (EIP-712 Refund Protocol) deployed and managed via `@circle-fin/smart-contract-platform`
-- [OpenAI](https://platform.openai.com/) validates submitted work deliverables against agreement criteria using vision models
-- Webhook signature verification ensures secure transaction notifications
-- Agent wallet automatically initialized via the `generate-wallet` script
-- Real-time UI updates powered by Supabase Realtime subscriptions
+   Then in the [Circle Console → Webhooks](https://console.circle.com/webhooks), add an endpoint: `https://your-ngrok-url.ngrok.io/api/webhooks/circle`. Keep ngrok running to receive webhook events.
 
 ## Environment Variables
 
 Copy `.env.example` to `.env.local` and fill in the required values:
 
-```bash
-# Deployment URL
-VERCEL_URL=http://localhost:3000
-NEXT_PUBLIC_VERCEL_URL=http://localhost:3000
-
-# Supabase
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-
-# USDC Smart Contract
-NEXT_PUBLIC_USDC_CONTRACT_ADDRESS=
-
-# Agent Wallet (auto-generated by npm run generate-wallet)
-NEXT_PUBLIC_AGENT_WALLET_ID=
-NEXT_PUBLIC_AGENT_WALLET_ADDRESS=
-
-# Circle
-CIRCLE_API_KEY=
-CIRCLE_ENTITY_SECRET=
-CIRCLE_BLOCKCHAIN=
-
-# OpenAI
-OPENAI_API_KEY=
-```
-
 | Variable | Scope | Purpose |
 | --- | --- | --- |
-| `VERCEL_URL` | Server-side | Base URL of the deployment (e.g., `http://localhost:3000`). |
-| `NEXT_PUBLIC_VERCEL_URL` | Public | Public-facing base URL for client-side usage. |
+| `VERCEL_URL` / `NEXT_PUBLIC_VERCEL_URL` | Server / Public | Base URL of the deployment (e.g. `http://localhost:3000`). |
 | `NEXT_PUBLIC_SUPABASE_URL` | Public | Supabase project URL. |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Public | Supabase anonymous/public key. |
-| `NEXT_PUBLIC_USDC_CONTRACT_ADDRESS` | Public | USDC token contract address on the target blockchain. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-side | Privileged server-side writes + file storage. |
+| `NEXT_PUBLIC_USDC_CONTRACT_ADDRESS` | Public | USDC token contract address (Arc Testnet: `0x3600…0000`). |
 | `NEXT_PUBLIC_AGENT_WALLET_ID` | Public | Circle wallet ID for the escrow agent. Auto-generated. |
 | `NEXT_PUBLIC_AGENT_WALLET_ADDRESS` | Public | Wallet address for the escrow agent. Auto-generated. |
 | `CIRCLE_API_KEY` | Server-side | Circle API key for wallet and contract operations. |
 | `CIRCLE_ENTITY_SECRET` | Server-side | Circle entity secret for signing transactions. |
-| `CIRCLE_BLOCKCHAIN` | Server-side | Blockchain network identifier (e.g., `ARC-TESTNET`). Auto-generated. |
-| `OPENAI_API_KEY` | Server-side | OpenAI API key for AI-powered work validation. |
+| `CIRCLE_BLOCKCHAIN` | Server-side | Blockchain network identifier (e.g. `ARC-TESTNET`). Auto-generated. |
+| `ANTHROPIC_API_KEY` | Server-side | Claude — validates delivered work before release. |
+| `OPENAI_API_KEY` | Server-side | Optional / legacy (validation now uses Claude). |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Server-side | Google sign-in (optional). |
 
-## User Accounts
+## Demo Script
 
-### Default Account
-
-On first visit, sign up with any email and password. The first user created can act as both a depositor (client) and a beneficiary (freelancer) across different agreements.
-
-### Signup Rate Limits
-
-Supabase limits email signups to **2 per hour** by default (unless custom SMTP is configured). If you hit an "email rate limit exceeded" error during testing:
-
-- **Local Supabase (Docker):** Email verification is handled by the built-in [Inbucket](http://127.0.0.1:54324) mail server — check it to confirm signups. The rate limit can be adjusted in `supabase/config.toml` under `[auth.rate_limit]`.
-- **Remote Supabase (Cloud):** Use real email addresses (disposable emails may fail verification). If you hit the limit, you can manually add users via the Supabase dashboard under **Authentication → Users**.
+1. **Register a work** with two contributors — yourself + an **AI contributor**
+   (e.g. "Claude Composer") at, say, 70/30. On submit, the AI gets a Circle wallet
+   and an ERC-8004 identity (linked on Arcscan from the work page).
+2. From a second account, open the work and **License this work** — this creates
+   and budgets the ERC-8183 job on Arc.
+3. **Fund escrow** (buyer), then **Validate work & release royalties**. The agent
+   receives the escrow, then USDC fans out: 70% to you, 30% to the AI wallet —
+   watch the payout statuses flip to COMPLETE live.
+4. **Register a derivative** linking to the original to show the provenance chain.
 
 ## Security & Usage Model
 
 This sample application:
-- Assumes testnet usage only
+- Assumes **testnet usage only**
 - Handles secrets via environment variables
-- Verifies webhook signatures for security
-- Is not intended for production use without modification
+- Verifies webhook signatures
+- Is **not** intended for production use without modification
+
+See also [`ROYALTY_PROTOCOL.md`](ROYALTY_PROTOCOL.md) for the full protocol design,
+[`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md), and [`SECURITY.md`](SECURITY.md).
