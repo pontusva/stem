@@ -31,7 +31,7 @@ import { RoyaltyBreakdown, BreakdownRow } from "@/components/royalty-breakdown";
 import { LicenseWorkButton } from "@/components/license-work-button";
 import { ShareWorkButton } from "@/components/share-work-button";
 import { WorkFileUpload } from "@/components/work-file-upload";
-import { AudioPlayer } from "@/components/audio-player";
+import { StreamingAudioPlayer } from "@/components/streaming-audio-player";
 import { computeSplitAmounts, formatUsdc, UPSTREAM_SHARE_PCT } from "@/lib/utils/royalty";
 
 export const dynamic = "force-dynamic";
@@ -200,7 +200,13 @@ export default async function WorkDetailPage({
                 className="max-h-64 w-full rounded-2xl object-contain"
               />
             ) : isAudio && work.file_url ? (
-              <AudioPlayer src={work.file_url} title={work.title} />
+              <StreamingAudioPlayer
+                workId={work.id}
+                src={work.file_url}
+                title={work.title}
+                free={isOwner || viewerSplit > 0}
+                signedIn={!!user}
+              />
             ) : hasFile ? (
               <a
                 href={work.file_url!}

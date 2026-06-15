@@ -36,6 +36,8 @@ export interface EarningsSummary {
   pending: number;
   fromRemixTotal: number; // settled income arriving via downstream remixes
   items: EarningItem[];
+  pocketBalance: number; // withdrawable streaming income sitting in the pocket
+  streamingEarned: number; // lifetime pay-per-listen credits
 }
 
 /**
@@ -61,8 +63,35 @@ export const createEarningsService = (supabase: SupabaseClient) => ({
       ...(aiWallets ?? []).map((w: any) => w.id),
     ];
     if (walletIds.length === 0) {
-      return { total: 0, pending: 0, fromRemixTotal: 0, items: [] };
+      return {
+        total: 0,
+        pending: 0,
+        fromRemixTotal: 0,
+        items: [],
+        pocketBalance: 0,
+        streamingEarned: 0,
+      };
     }
+
+    // Streaming (pay-per-listen) income lives in the pocket ledger, separate
+    // from the royalty_payments escrow flow.
+    const { data: pocketRows } = await supabase
+      .from("pockets")
+      .select("balance_usdc")
+      .in("wallet_id", walletIds);
+    const pocketBalance = (pocketRows ?? []).reduce(
+      (a: number, p: any) => a + Number(p.balance_usdc),
+      0
+    );
+    const { data: creditRows } = await supabase
+      .from("pocket_ledger")
+      .select("amount_usdc")
+      .in("wallet_id", walletIds)
+      .eq("entry_type", "STREAM_CREDIT");
+    const streamingEarned = (creditRows ?? []).reduce(
+      (a: number, r: any) => a + Number(r.amount_usdc),
+      0
+    );
 
     const { data, error } = await supabase
       .from("royalty_payments")
@@ -104,6 +133,6 @@ export const createEarningsService = (supabase: SupabaseClient) => ({
       .filter((i) => i.status === "COMPLETE" && i.fromRemix)
       .reduce((a, i) => a + i.amount, 0);
 
-    return { total, pending, fromRemixTotal, items };
+    return { total, pending, fromRemixTotal, items, pocketBalance, streamingEarned };
   },
 });

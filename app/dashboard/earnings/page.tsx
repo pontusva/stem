@@ -27,6 +27,7 @@ import { KawaiiAI } from "@/components/kawaii/kawaii-ai";
 import { KawaiiWallet } from "@/components/kawaii/kawaii-wallet";
 import { EmptyState } from "@/components/kawaii/empty-state";
 import { SparkleDecoration } from "@/components/kawaii/sparkle-decoration";
+import { PocketCard } from "@/components/pocket-card";
 import { formatUsdc } from "@/lib/utils/royalty";
 
 export const dynamic = "force-dynamic";
@@ -54,7 +55,14 @@ export default async function EarningsPage() {
     ? await createEarningsService(createSupabaseServiceClient()).getEarnings(
         profile.id
       )
-    : { total: 0, pending: 0, fromRemixTotal: 0, items: [] };
+    : {
+        total: 0,
+        pending: 0,
+        fromRemixTotal: 0,
+        items: [],
+        pocketBalance: 0,
+        streamingEarned: 0,
+      };
 
   return (
     <div className="space-y-8">
@@ -77,6 +85,11 @@ export default async function EarningsPage() {
         <StatCard label="🌿 from remixes" value={formatUsdc(earnings.fromRemixTotal)} />
         <StatCard label="pending" value={formatUsdc(earnings.pending)} />
       </div>
+
+      <PocketCard
+        balance={earnings.pocketBalance}
+        streamingEarned={earnings.streamingEarned}
+      />
 
       {earnings.items.length === 0 ? (
         <EmptyState

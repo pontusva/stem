@@ -54,6 +54,10 @@ interface Props {
   title?: string;
   /** Reports cumulative seconds actually listened (used later for payment triggers). */
   onSecondsPlayed?: (seconds: number) => void;
+  /** When true, playback is paused and play is disabled (e.g. pocket empty). */
+  blocked?: boolean;
+  /** Surfaces play/pause transitions to a parent (e.g. to flush a charge on pause). */
+  onPlayingChange?: (playing: boolean) => void;
 }
 
 /**
@@ -62,7 +66,13 @@ interface Props {
  * deliberately exposes no download affordance. A waveform-style bar doubles as
  * the seek control. Tracks seconds actually played in component state.
  */
-export function AudioPlayer({ src, title, onSecondsPlayed }: Props) {
+export function AudioPlayer({
+  src,
+  title,
+  onSecondsPlayed,
+  blocked = false,
+  onPlayingChange,
+}: Props) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const lastTimeRef = useRef(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -79,6 +89,13 @@ export function AudioPlayer({ src, title, onSecondsPlayed }: Props) {
   useEffect(() => {
     onSecondsPlayed?.(secondsPlayed);
   }, [secondsPlayed, onSecondsPlayed]);
+
+  // When the parent blocks playback (e.g. the listener's pocket ran dry), pause.
+  useEffect(() => {
+    if (blocked && audioRef.current && !audioRef.current.paused) {
+      audioRef.current.pause();
+    }
+  }, [blocked]);
 
   function handleTimeUpdate() {
     const audio = audioRef.current;
@@ -97,6 +114,7 @@ export function AudioPlayer({ src, title, onSecondsPlayed }: Props) {
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.paused) {
+      if (blocked) return;
       audio.play();
     } else {
       audio.pause();
@@ -120,8 +138,9 @@ export function AudioPlayer({ src, title, onSecondsPlayed }: Props) {
         <button
           type="button"
           onClick={togglePlay}
+          disabled={blocked && !isPlaying}
           aria-label={isPlaying ? "Pause" : "Play"}
-          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[var(--blue-deep)] text-white shadow-[var(--shadow-cloud-sm)] transition-transform hover:scale-105 active:scale-95"
+          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[var(--blue-deep)] text-white shadow-[var(--shadow-cloud-sm)] transition-transform hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isPlaying ? (
             <Pause className="h-5 w-5" fill="currentColor" />
@@ -185,10 +204,17 @@ export function AudioPlayer({ src, title, onSecondsPlayed }: Props) {
         onContextMenu={(e) => e.preventDefault()}
         onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
         onTimeUpdate={handleTimeUpdate}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
+        onPlay={() => {
+          setIsPlaying(true);
+          onPlayingChange?.(true);
+        }}
+        onPause={() => {
+          setIsPlaying(false);
+          onPlayingChange?.(false);
+        }}
         onEnded={() => {
           setIsPlaying(false);
+          onPlayingChange?.(false);
           lastTimeRef.current = 0;
         }}
       />
