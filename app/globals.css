@@ -1,0 +1,237 @@
+/**
+ * Copyright 2026 Circle Internet Group, Inc.  All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Nunito:ital,wght@0,400..1000;1,400..900&display=swap');
+@import "tailwindcss";
+@custom-variant dark (&:is(.dark *));
+
+/* =====================================================================
+   stem — kawaii cloud theme
+   cloud whites, baby blues, soft lavender, blush pink. dreamy + fluffy.
+   ===================================================================== */
+
+:root {
+  --background: #FAFCFF;
+  --foreground: #4A5578;          /* soft slate-blue, never harsh black */
+  --card: #FFFFFF;
+  --card-foreground: #4A5578;
+  --popover: #FFFFFF;
+  --popover-foreground: #4A5578;
+  --primary: #8FBEF0;             /* baby blue */
+  --primary-foreground: #FFFFFF;
+  --secondary: #E8D6FA;           /* soft lavender */
+  --secondary-foreground: #5B4A78;
+  --muted: #EEF4FC;
+  --muted-foreground: #94A0C0;    /* gentle blue-grey */
+  --accent: #FAD6E8;              /* blush pink */
+  --accent-foreground: #8A4A66;
+  --destructive: #F28BB0;         /* soft rose */
+  --destructive-foreground: #FFFFFF;
+  --border: #E2ECFA;              /* whisper-soft blue */
+  --input: #F4F8FE;
+  --ring: #B8D4F0;
+  --radius: 1.5rem;               /* 24px — round everything */
+
+  --blue: #B8D4F0;
+  --blue-deep: #8FBEF0;
+  --lavender: #E8D6FA;
+  --lavender-deep: #C9A9F5;
+  --blush: #FAD6E8;
+  --blush-deep: #F5A9C9;
+  --cloud: #FFFFFF;
+
+  --font-sans: 'Nunito', ui-sans-serif, system-ui, sans-serif;
+
+  /* soft, colour-tinted shadows — never harsh black */
+  --shadow-cloud: 0 10px 30px -8px rgba(150, 185, 235, 0.45), 0 4px 12px -4px rgba(200, 175, 240, 0.30);
+  --shadow-cloud-lg: 0 22px 50px -12px rgba(150, 185, 235, 0.50), 0 8px 20px -6px rgba(210, 180, 245, 0.35);
+  --shadow-cloud-sm: 0 6px 16px -6px rgba(150, 185, 235, 0.40);
+  --shadow-glow-blue: 0 0 0 4px rgba(184, 212, 240, 0.45);
+  --shadow-glow-lavender: 0 0 0 4px rgba(201, 169, 245, 0.40);
+}
+
+.dark {
+  /* dreamy dusk — still pastel, just dimmed */
+  --background: #1E2138;
+  --foreground: #E6ECFB;
+  --card: #2A2E4A;
+  --card-foreground: #E6ECFB;
+  --popover: #2A2E4A;
+  --popover-foreground: #E6ECFB;
+  --primary: #8FBEF0;
+  --primary-foreground: #1E2138;
+  --secondary: #463B66;
+  --secondary-foreground: #E8D6FA;
+  --muted: #2F3454;
+  --muted-foreground: #A6AFD2;
+  --accent: #5C3F58;
+  --accent-foreground: #FAD6E8;
+  --destructive: #F28BB0;
+  --destructive-foreground: #1E2138;
+  --border: #3A3F62;
+  --input: #2F3454;
+  --ring: #8FBEF0;
+  --shadow-cloud: 0 10px 30px -8px rgba(20, 24, 50, 0.55), 0 4px 12px -4px rgba(60, 50, 90, 0.40);
+  --shadow-cloud-lg: 0 22px 50px -12px rgba(15, 18, 42, 0.65);
+  --shadow-cloud-sm: 0 6px 16px -6px rgba(20, 24, 50, 0.50);
+}
+
+/* Map our variables onto Tailwind v4's color/radius/font tokens */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-blue: var(--blue);
+  --color-blue-deep: var(--blue-deep);
+  --color-lavender: var(--lavender);
+  --color-blush: var(--blush);
+
+  --font-sans: var(--font-sans);
+
+  --radius-sm: calc(var(--radius) - 12px);
+  --radius-md: calc(var(--radius) - 8px);
+  --radius-lg: calc(var(--radius) - 4px);
+  --radius-xl: var(--radius);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 16px);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    min-height: 100vh;
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    background: linear-gradient(
+      160deg,
+      #FAFCFF 0%,
+      #EAF3FE 28%,
+      #F3EDFE 62%,
+      #FDEFF6 100%
+    );
+    background-attachment: fixed;
+  }
+
+  .dark body {
+    background: linear-gradient(160deg, #1E2138 0%, #232744 45%, #2A2440 100%);
+  }
+
+  ::selection {
+    background: var(--lavender);
+    color: var(--secondary-foreground);
+  }
+}
+
+/* ---------------------------------------------------------------------
+   Kawaii utilities
+   --------------------------------------------------------------------- */
+@layer utilities {
+  .shadow-cloud { box-shadow: var(--shadow-cloud); }
+  .shadow-cloud-lg { box-shadow: var(--shadow-cloud-lg); }
+  .shadow-cloud-sm { box-shadow: var(--shadow-cloud-sm); }
+  .glow-blue { box-shadow: var(--shadow-glow-blue); }
+
+  /* fluffy cloud card */
+  .card-cloud {
+    background: var(--card);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-cloud);
+  }
+
+  /* dreamy gradient pill button */
+  .btn-dream {
+    background: linear-gradient(135deg, #A7CDF5 0%, #B8B0F2 50%, #D9B8F0 100%);
+    color: #fff;
+    border-radius: 9999px;
+    box-shadow: 0 8px 20px -6px rgba(150, 160, 235, 0.55);
+    transition: transform 0.18s cubic-bezier(.34,1.56,.64,1), box-shadow 0.18s ease, filter 0.18s ease;
+  }
+  .btn-dream:hover {
+    transform: translateY(-3px) scale(1.03);
+    box-shadow: 0 14px 28px -6px rgba(150, 160, 235, 0.6);
+    filter: brightness(1.05);
+  }
+  .btn-dream:active { transform: translateY(0) scale(0.98); }
+
+  .btn-blush {
+    background: linear-gradient(135deg, #FBC2DD 0%, #F5A9C9 100%);
+    color: #fff;
+  }
+
+  /* shimmering rainbow text for the wordmark */
+  .text-rainbow {
+    background: linear-gradient(90deg, #8FBEF0, #C9A9F5, #F5A9C9, #8FBEF0);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: shimmer 6s linear infinite;
+  }
+
+  .animate-floaty { animation: floaty 4s ease-in-out infinite; }
+  .animate-bounce-soft { animation: bounceSoft 1.4s ease-in-out infinite; }
+  .animate-wiggle { animation: wiggle 2.5s ease-in-out infinite; }
+  .animate-twinkle { animation: twinkle 2.2s ease-in-out infinite; }
+  .animate-pop-in { animation: popIn 0.4s cubic-bezier(.34,1.56,.64,1) both; }
+}
+
+@keyframes shimmer { to { background-position: 200% center; } }
+@keyframes floaty {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+@keyframes bounceSoft {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-14px); }
+}
+@keyframes wiggle {
+  0%, 100% { transform: rotate(-3deg); }
+  50% { transform: rotate(3deg); }
+}
+@keyframes twinkle {
+  0%, 100% { opacity: 0.35; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+@keyframes popIn {
+  0% { transform: scale(0.9); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
