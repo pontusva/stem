@@ -29,8 +29,6 @@ namespace NodeJS {
     CIRCLE_BLOCKCHAIN: string
     GOOGLE_CLIENT_ID: string
     GOOGLE_CLIENT_SECRET: string
-    OPENAI_API_KEY: string
-    OPENAI_ASSISTANT_ID: string
     ANTHROPIC_API_KEY: string
   }
 }
