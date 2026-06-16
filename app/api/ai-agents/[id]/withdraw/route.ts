@@ -25,34 +25,57 @@ import { getCurrentUser } from "@/lib/utils/current-user";
 export const dynamic = "force-dynamic";
 
 /**
- * POST /api/pocket/withdraw
- * Sends the caller's full pocket balance on-chain from the agent (custodian)
- * wallet to their own Circle wallet address.
+ * POST /api/ai-agents/[id]/withdraw
+ * Withdraw an AI agent's streaming pocket on-chain to the agent's OWN wallet —
+ * so the agent holds its streaming income just like its royalties. Only the
+ * human who created the agent may trigger this.
  */
-export async function POST() {
+export async function POST(
+  _req: Request,
+  { params }: { params: { id: string } }
+) {
   const supabase = createSupabaseServerClient();
   const user = await getCurrentUser(supabase);
-  if (!user || !user.wallet) {
+  if (!user) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
   const service = createSupabaseServiceClient();
-  const streaming = createStreamingService(service);
+
+  // Load the agent wallet and verify the caller created it.
+  const { data: agent } = await service
+    .from("wallets")
+    .select("id, wallet_address, is_ai, created_by_profile_id")
+    .eq("id", params.id)
+    .eq("is_ai", true)
+    .maybeSingle();
+
+  if (!agent) {
+    return NextResponse.json({ error: "AI agent not found" }, { status: 404 });
+  }
+  if (agent.created_by_profile_id !== user.profileId) {
+    return NextResponse.json(
+      { error: "You can only withdraw for an AI agent you created" },
+      { status: 403 }
+    );
+  }
+  if (!agent.wallet_address) {
+    return NextResponse.json(
+      { error: "Agent has no wallet address" },
+      { status: 400 }
+    );
+  }
 
   try {
-    // Only the human's own pocket. AI agents withdraw their own streaming income
-    // to their own wallet via POST /api/ai-agents/[id]/withdraw.
-    const walletIds = await streaming.getOwnWalletIds(user.profileId);
-
-    const { amount, transferId } = await streaming.withdraw(
-      walletIds,
-      user.wallet.wallet_address
+    const { amount, transferId } = await createStreamingService(service).withdraw(
+      [agent.id],
+      agent.wallet_address
     );
     return NextResponse.json({ amount, transferId });
   } catch (error: any) {
     const message = error?.message || "Failed to withdraw";
     const status = message === "Nothing to withdraw" ? 400 : 500;
-    if (status === 500) console.error("Pocket withdrawal failed:", error);
+    if (status === 500) console.error("Agent pocket withdrawal failed:", error);
     return NextResponse.json({ error: message }, { status });
   }
 }

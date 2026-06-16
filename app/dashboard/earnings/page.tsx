@@ -59,6 +59,7 @@ export default async function EarningsPage() {
         total: 0,
         pending: 0,
         fromRemixTotal: 0,
+        aiEarned: 0,
         items: [],
         pocketBalance: 0,
         streamingEarned: 0,
@@ -74,7 +75,8 @@ export default async function EarningsPage() {
             <div>
               <h1 className="text-3xl font-extrabold">your earnings</h1>
               <p className="font-semibold text-muted-foreground">
-                Every royalty and stream that floated to you and your AI agents.
+                Royalties and streams that floated to your wallet. Your AI agents&apos;
+                royalties are tracked separately.
               </p>
             </div>
           </div>
@@ -93,10 +95,13 @@ export default async function EarningsPage() {
         <h2 className="text-sm font-extrabold uppercase tracking-wide text-muted-foreground">
           license royalties
         </h2>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard label="earned (settled)" value={formatUsdc(earnings.total, 4)} big />
           <StatCard label="🌿 from remixes" value={formatUsdc(earnings.fromRemixTotal, 4)} />
           <StatCard label="pending" value={formatUsdc(earnings.pending, 4)} />
+          <Link href="/dashboard/ai" className="block transition-transform hover:scale-[1.02]">
+            <StatCard label="🤖 your AI agents →" value={formatUsdc(earnings.aiEarned, 4)} />
+          </Link>
         </div>
       </section>
 

@@ -228,6 +228,18 @@ export const createAiAgentService = (supabase: SupabaseClient) => ({
       .in("validator_wallet_id", ids)
       .eq("status", "COMPLETE");
 
+    // Streaming income held in each agent's own pocket (withdrawable to its own
+    // wallet) + lifetime streaming credits.
+    const { data: pockets } = await supabase
+      .from("pockets")
+      .select("wallet_id, balance_usdc")
+      .in("wallet_id", ids);
+    const { data: streamCredits } = await supabase
+      .from("pocket_ledger")
+      .select("wallet_id, amount_usdc")
+      .in("wallet_id", ids)
+      .eq("entry_type", "STREAM_CREDIT");
+
     const worksByWallet = new Map<string, Set<string>>();
     (contribs ?? []).forEach((c: any) => {
       if (!worksByWallet.has(c.wallet_id)) worksByWallet.set(c.wallet_id, new Set());
@@ -250,12 +262,27 @@ export const createAiAgentService = (supabase: SupabaseClient) => ({
       validationsByWallet.set(v.validator_wallet_id, cur);
     });
 
+    const pocketByWallet = new Map<string, number>();
+    (pockets ?? []).forEach((p: any) => {
+      pocketByWallet.set(p.wallet_id, Number(p.balance_usdc));
+    });
+
+    const streamingByWallet = new Map<string, number>();
+    (streamCredits ?? []).forEach((r: any) => {
+      streamingByWallet.set(
+        r.wallet_id,
+        (streamingByWallet.get(r.wallet_id) ?? 0) + Number(r.amount_usdc)
+      );
+    });
+
     return agents.map((a: any) => ({
       ...(a as AiAgent),
       works_count: worksByWallet.get(a.id)?.size ?? 0,
       total_earned: earnedByWallet.get(a.id) ?? 0,
       validations_count: validationsByWallet.get(a.id)?.count ?? 0,
       fees_earned: validationsByWallet.get(a.id)?.fees ?? 0,
+      streaming_pocket: pocketByWallet.get(a.id) ?? 0,
+      streaming_earned: streamingByWallet.get(a.id) ?? 0,
     }));
   },
 

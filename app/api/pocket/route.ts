@@ -37,9 +37,9 @@ export async function GET() {
   const streaming = createStreamingService(service);
 
   await streaming.getOrCreatePocket(user.wallet.id, user.profileId);
-  // Aggregate across the user's own + AI-agent wallets, matching the earnings
-  // display and the withdraw scope.
-  const walletIds = await streaming.getOwnedWalletIds(user.profileId);
+  // The human's own pocket only. AI agents hold their own streaming income and
+  // withdraw it to their own wallet (see the per-agent withdraw on the AI dash).
+  const walletIds = await streaming.getOwnWalletIds(user.profileId);
   const [balance, ledger] = await Promise.all([
     streaming.getPocketBalanceForWallets(walletIds),
     streaming.getLedgerForWallets(walletIds),

@@ -32,18 +32,25 @@ export interface EarningItem {
 }
 
 export interface EarningsSummary {
-  total: number; // settled (COMPLETE)
-  pending: number;
-  fromRemixTotal: number; // settled income arriving via downstream remixes
-  items: EarningItem[];
-  pocketBalance: number; // withdrawable streaming income sitting in the pocket
-  streamingEarned: number; // lifetime pay-per-listen credits
+  total: number; // settled (COMPLETE) royalties to the user's OWN wallet
+  pending: number; // pending royalties to the user's OWN wallet
+  fromRemixTotal: number; // settled own-wallet income arriving via downstream remixes
+  aiEarned: number; // settled royalties to AI agents the user created (tracked separately)
+  items: EarningItem[]; // royalty payments to the user's OWN wallet only
+  pocketBalance: number; // withdrawable streaming income (own + AI agents — matches withdraw)
+  streamingEarned: number; // lifetime pay-per-listen credits (own + AI agents)
 }
 
 /**
- * Earnings = every royalty payout to the user's own wallet AND to any AI agent
- * they created. Flags payouts that arrived from a downstream remix (the source
- * work is itself a derivative), i.e. provenance income.
+ * "Your earnings" is the logged-in human's own wallet. Royalty totals and the
+ * feed count ONLY payouts to the user's own wallet (profile_id) — royalties paid
+ * to AI agents the user created are surfaced separately as `aiEarned` (and on the
+ * AI agents dashboard), not folded into the human's headline total.
+ *
+ * Streaming pocket figures still span own + AI agents, because the pocket
+ * withdrawal flow sweeps both together; keeping them combined makes the displayed
+ * balance match what the withdraw button actually moves. Flags payouts that
+ * arrived from a downstream remix (the source work is a derivative).
  */
 export const createEarningsService = (supabase: SupabaseClient) => ({
   async getEarnings(profileId: string): Promise<EarningsSummary> {
@@ -58,27 +65,31 @@ export const createEarningsService = (supabase: SupabaseClient) => ({
       .eq("created_by_profile_id", profileId)
       .eq("is_ai", true);
 
-    const walletIds = [
-      ...(ownWallets ?? []).map((w: any) => w.id),
-      ...(aiWallets ?? []).map((w: any) => w.id),
-    ];
-    if (walletIds.length === 0) {
+    const ownWalletIds = (ownWallets ?? []).map((w: any) => w.id);
+    const aiWalletIds = (aiWallets ?? []).map((w: any) => w.id);
+    const allWalletIds = [...ownWalletIds, ...aiWalletIds];
+
+    if (allWalletIds.length === 0) {
       return {
         total: 0,
         pending: 0,
         fromRemixTotal: 0,
+        aiEarned: 0,
         items: [],
         pocketBalance: 0,
         streamingEarned: 0,
       };
     }
 
-    // Streaming (pay-per-listen) income lives in the pocket ledger, separate
-    // from the royalty_payments escrow flow.
+    // Streaming (pay-per-listen) income lives in the pocket ledger, separate from
+    // the royalty_payments flow. Scoped to the human's OWN wallet — an AI agent's
+    // streaming income stays in its own pocket and is withdrawn to its own wallet
+    // (per-agent withdraw on the AI dashboard), so this matches the human's
+    // own-only withdraw and shows on the agent card, not here.
     const { data: pocketRows } = await supabase
       .from("pockets")
       .select("balance_usdc")
-      .in("wallet_id", walletIds);
+      .in("wallet_id", ownWalletIds);
     const pocketBalance = (pocketRows ?? []).reduce(
       (a: number, p: any) => a + Number(p.balance_usdc),
       0
@@ -86,7 +97,7 @@ export const createEarningsService = (supabase: SupabaseClient) => ({
     const { data: creditRows } = await supabase
       .from("pocket_ledger")
       .select("amount_usdc")
-      .in("wallet_id", walletIds)
+      .in("wallet_id", ownWalletIds)
       .eq("entry_type", "STREAM_CREDIT");
     const streamingEarned = (creditRows ?? []).reduce(
       (a: number, r: any) => a + Number(r.amount_usdc),
@@ -102,12 +113,13 @@ export const createEarningsService = (supabase: SupabaseClient) => ({
            work:works!licenses_work_id_fkey ( id, title, parent_work_id )
          )`
       )
-      .in("wallet_id", walletIds)
+      .in("wallet_id", allWalletIds)
       .order("created_at", { ascending: false });
 
     if (error) throw new Error(`Failed to load earnings: ${error.message}`);
 
-    const items: EarningItem[] = (data ?? []).map((p: any) => {
+    const ownSet = new Set(ownWalletIds);
+    const allRows: EarningItem[] = (data ?? []).map((p: any) => {
       const work = p.license?.work ?? null;
       return {
         id: p.id,
@@ -123,6 +135,10 @@ export const createEarningsService = (supabase: SupabaseClient) => ({
       };
     });
 
+    // The human's own-wallet payouts drive the headline total and feed; an AI
+    // agent the user created earns into its OWN wallet and is tallied separately.
+    const items = allRows.filter((i) => ownSet.has(i.walletId));
+
     const total = items
       .filter((i) => i.status === "COMPLETE")
       .reduce((a, i) => a + i.amount, 0);
@@ -132,7 +148,18 @@ export const createEarningsService = (supabase: SupabaseClient) => ({
     const fromRemixTotal = items
       .filter((i) => i.status === "COMPLETE" && i.fromRemix)
       .reduce((a, i) => a + i.amount, 0);
+    const aiEarned = allRows
+      .filter((i) => !ownSet.has(i.walletId) && i.status === "COMPLETE")
+      .reduce((a, i) => a + i.amount, 0);
 
-    return { total, pending, fromRemixTotal, items, pocketBalance, streamingEarned };
+    return {
+      total,
+      pending,
+      fromRemixTotal,
+      aiEarned,
+      items,
+      pocketBalance,
+      streamingEarned,
+    };
   },
 });

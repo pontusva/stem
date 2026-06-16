@@ -104,24 +104,18 @@ export const createStreamingService = (supabase: SupabaseClient) => ({
   },
 
   /**
-   * The caller's pocket wallet ids: their own wallet(s) plus any AI-agent
-   * wallets they created. Used so balance, ledger, and withdraw all cover the
-   * same set (matching the earnings display).
+   * The human caller's own pocket wallet ids (profile_id = them). AI-agent
+   * wallets are NOT included: an agent's streaming income stays in its own
+   * pocket and is withdrawn to the agent's own wallet (see the per-agent
+   * withdraw), exactly like its royalties — so the human's balance, ledger,
+   * and withdraw all cover only their own wallet.
    */
-  async getOwnedWalletIds(profileId: string): Promise<string[]> {
+  async getOwnWalletIds(profileId: string): Promise<string[]> {
     const { data: own } = await supabase
       .from("wallets")
       .select("id")
       .eq("profile_id", profileId);
-    const { data: ai } = await supabase
-      .from("wallets")
-      .select("id")
-      .eq("created_by_profile_id", profileId)
-      .eq("is_ai", true);
-    return [
-      ...(own ?? []).map((w: any) => w.id),
-      ...(ai ?? []).map((w: any) => w.id),
-    ];
+    return (own ?? []).map((w: any) => w.id);
   },
 
   async getPocketBalanceForWallets(walletIds: string[]): Promise<number> {

@@ -30,6 +30,30 @@ export interface ValidatorAgent {
   erc8004_agent_id: string | null;
 }
 
+/** One row in the validator's public activity feed. */
+export interface ValidatorActivityItem {
+  id: string;
+  verdict: "PASS" | "FAIL";
+  confidence: number | null;
+  fee_usdc: number;
+  model: string;
+  evidence_kind: string | null;
+  onchain_tx_hash: string | null;
+  created_at: string;
+  work: { id: string; title: string; work_type: string } | null;
+}
+
+export interface ValidatorOverview {
+  validator: ValidatorAgent;
+  stats: {
+    feesEarned: number;
+    reviewed: number;
+    passed: number;
+    rejected: number;
+  };
+  recent: ValidatorActivityItem[];
+}
+
 const VALIDATOR_SELECT =
   "id, display_name, wallet_address, circle_wallet_id, erc8004_agent_id";
 
@@ -99,5 +123,47 @@ export const createValidatorAgentService = (supabase: SupabaseClient) => ({
 
     cached = walletRow as ValidatorAgent;
     return cached;
+  },
+
+  /**
+   * Public transparency overview of the validator's economy: lifetime fee
+   * income + pass/reject counts, plus its most recent reviews. Must be called
+   * with the service-role client — the validator wallet is owner-less, so RLS
+   * would hide its validation rows from anon/authed clients.
+   */
+  async getValidatorOverview(): Promise<ValidatorOverview> {
+    const validator = await this.getOrCreateValidatorAgent();
+
+    // Lifetime aggregates over every completed validation.
+    const { data: agg } = await supabase
+      .from("validations")
+      .select("verdict, fee_usdc, status")
+      .eq("validator_wallet_id", validator.id);
+
+    const complete = (agg ?? []).filter((r: any) => r.status === "COMPLETE");
+    const stats = {
+      feesEarned: complete.reduce((a: number, r: any) => a + Number(r.fee_usdc), 0),
+      reviewed: complete.length,
+      passed: complete.filter((r: any) => r.verdict === "PASS").length,
+      rejected: complete.filter((r: any) => r.verdict === "FAIL").length,
+    };
+
+    // The most recent reviews, joined to the work they reviewed.
+    const { data: recent } = await supabase
+      .from("validations")
+      .select(
+        `id, verdict, confidence, fee_usdc, model, evidence_kind, onchain_tx_hash, created_at,
+         work:works!validations_work_id_fkey ( id, title, work_type )`
+      )
+      .eq("validator_wallet_id", validator.id)
+      .eq("status", "COMPLETE")
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    return {
+      validator,
+      stats,
+      recent: (recent ?? []) as unknown as ValidatorActivityItem[],
+    };
   },
 });

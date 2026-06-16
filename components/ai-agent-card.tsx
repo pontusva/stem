@@ -16,10 +16,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Sparkles, Music, Coins, ExternalLink, ShieldCheck } from "lucide-react";
+import { Sparkles, Music, Coins, ExternalLink, ShieldCheck, Headphones } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { CopyButton } from "@/components/copy-button";
 import { KawaiiAIAvatar } from "@/components/kawaii/kawaii-ai-avatar";
+import { AgentWithdrawButton } from "@/components/agent-withdraw-button";
 import { formatUsdc } from "@/lib/utils/royalty";
 import { AiAgentWithStats } from "@/types/royalty";
 
@@ -117,6 +118,24 @@ export function AiAgentCard({ agent }: { agent: AiAgentWithStats }) {
           <div className="flex items-center justify-center gap-1.5 rounded-2xl bg-[#D6F5E3]/60 py-2 text-xs font-extrabold text-[#3E9E68]">
             <ShieldCheck className="h-3.5 w-3.5" />
             validated {agent.validations_count} · earned {formatUsdc(agent.fees_earned, 4)} in fees
+          </div>
+        )}
+
+        {/* streaming income held in the agent's OWN pocket → withdraw to its wallet */}
+        {(agent.streaming_pocket > 0 || agent.streaming_earned > 0) && (
+          <div className="space-y-2 rounded-2xl bg-muted/60 p-3">
+            <div className="flex items-center justify-between text-xs font-bold">
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                <Headphones className="h-3.5 w-3.5" /> streaming pocket
+              </span>
+              <span className="text-[var(--blue-deep)]">
+                {formatUsdc(agent.streaming_pocket, 4)}
+                <span className="ml-1 font-semibold text-muted-foreground">
+                  · {formatUsdc(agent.streaming_earned, 4)} all-time
+                </span>
+              </span>
+            </div>
+            <AgentWithdrawButton agentId={agent.id} balance={agent.streaming_pocket} />
           </div>
         )}
       </CardContent>

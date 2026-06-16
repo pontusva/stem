@@ -81,6 +81,12 @@ export default async function RootLayout({
                   >
                     explore
                   </Link>
+                  <Link
+                    href="/validator"
+                    className="hidden rounded-full px-3 py-1.5 text-sm font-bold text-muted-foreground transition-colors hover:bg-secondary/40 hover:text-foreground sm:inline-block"
+                  >
+                    validator
+                  </Link>
                 </div>
                 {!hasEnvVars ? <EnvVarWarning /> : <HeaderAuth />}
               </div>

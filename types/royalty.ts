@@ -137,6 +137,10 @@ export interface AiAgentWithStats extends AiAgent {
   validations_count: number;
   /** total USDC earned in validation service fees (distinct from royalties) */
   fees_earned: number;
+  /** streaming income held in the agent's own pocket, withdrawable to its wallet */
+  streaming_pocket: number;
+  /** lifetime pay-per-listen credits earned by this agent */
+  streaming_earned: number;
 }
 
 /** A paid AI work-validation event (one per license validation attempt). */
