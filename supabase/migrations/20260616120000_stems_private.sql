@@ -1,0 +1,28 @@
+-- Copyright 2026 Circle Internet Group, Inc.  All rights reserved.
+--
+-- Licensed under the Apache License, Version 2.0 (the "License");
+-- you may not use this file except in compliance with the License.
+-- You may obtain a copy of the License at
+--
+--     http://www.apache.org/licenses/LICENSE-2.0
+--
+-- Unless required by applicable law or agreed to in writing, software
+-- distributed under the License is distributed on an "AS IS" BASIS,
+-- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-- See the License for the specific language governing permissions and
+-- limitations under the License.
+--
+-- SPDX-License-Identifier: Apache-2.0
+
+-- ---------------------------------------------------------------------
+-- Lock down the audio stems bucket: make it PRIVATE so the raw bytes are no
+-- longer reachable by a public URL. Audio is now served exclusively through
+-- short-lived signed URLs minted server-side for authenticated listeners
+-- (see /api/works/[id]/audio-url). Image/PDF works stay in the public
+-- works-files bucket, unaffected.
+--
+-- The works.file_url column keeps its (now non-public) URL string — it is only
+-- used for extension detection / "has a file" checks; playback uses signed URLs
+-- derived from works.file_path.
+-- ---------------------------------------------------------------------
+UPDATE storage.buckets SET public = false WHERE id = 'stems';

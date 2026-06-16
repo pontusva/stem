@@ -18,7 +18,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ArrowDownToLine, Loader2, Wallet } from "lucide-react";
@@ -26,12 +26,39 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { formatUsdc } from "@/lib/utils/royalty";
 
-const TOPUP_AMOUNT = 1; // USDC per top-up tap
+interface LedgerEntry {
+  id: string;
+  entry_type: string;
+  amount_usdc: number | string;
+  status: string;
+  created_at: string;
+}
+
+const ENTRY_META: Record<string, { label: string; positive: boolean }> = {
+  TOPUP: { label: "topped up", positive: true },
+  STREAM_CREDIT: { label: "streaming earnings", positive: true },
+  STREAM_DEBIT: { label: "streaming play", positive: false },
+  WITHDRAWAL: { label: "withdrawn", positive: false },
+};
+
+function fmtWhen(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
 
 /**
- * Streaming "pocket" surface for the earnings page: shows the withdrawable
- * balance from pay-per-listen credits, with top-up (fund listening) and
- * withdraw (cash out to the Circle wallet) actions.
+ * Streaming "pocket" surface for the earnings page — the creator's side, where
+ * pay-per-listen income is RECEIVED. Shows the withdrawable balance, a withdraw
+ * action, and a recent activity log. (Top-up lives on the listener side, in the
+ * work-detail player, since that's where money is put IN to stream.)
  */
 export function PocketCard({
   balance,
@@ -41,82 +68,107 @@ export function PocketCard({
   streamingEarned: number;
 }) {
   const router = useRouter();
-  const [busy, setBusy] = useState<"topup" | "withdraw" | null>(null);
+  const [withdrawing, setWithdrawing] = useState(false);
+  const [activity, setActivity] = useState<LedgerEntry[]>([]);
 
-  async function topUp() {
-    setBusy("topup");
+  const reload = useCallback(async () => {
     try {
-      const res = await fetch("/api/pocket/topup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount: TOPUP_AMOUNT }),
-      });
+      const res = await fetch("/api/pocket");
+      if (!res.ok) return;
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Top-up failed");
-      toast.success(`Topped up ${formatUsdc(TOPUP_AMOUNT)} to your pocket`);
-      router.refresh();
-    } catch (err: any) {
-      toast.error(err.message || "Top-up failed");
-    } finally {
-      setBusy(null);
+      setActivity(Array.isArray(json.ledger) ? json.ledger.slice(0, 6) : []);
+    } catch {
+      // ignore — activity is best-effort
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
 
   async function withdraw() {
-    setBusy("withdraw");
+    setWithdrawing(true);
     try {
       const res = await fetch("/api/pocket/withdraw", { method: "POST" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Withdrawal failed");
-      toast.success(`Withdrew ${formatUsdc(json.amount, 4)} to your wallet`);
+      toast.success(`Withdrew ${formatUsdc(json.amount, 6)} to your wallet`);
+      await reload();
       router.refresh();
     } catch (err: any) {
       toast.error(err.message || "Withdrawal failed");
     } finally {
-      setBusy(null);
+      setWithdrawing(false);
     }
   }
 
   return (
     <Card>
-      <CardContent className="flex flex-wrap items-center justify-between gap-4 py-5">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-[#EAF3FE] to-[#F3EDFE]">
-            <Wallet className="h-5 w-5 text-[var(--blue-deep)]" />
+      <CardContent className="space-y-4 py-5">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-[#EAF3FE] to-[#F3EDFE]">
+              <Wallet className="h-5 w-5 text-[var(--blue-deep)]" />
+            </div>
+            <div className="leading-tight">
+              <div className="text-2xl font-extrabold text-[var(--blue-deep)]">
+                {formatUsdc(balance, 4)}
+              </div>
+              <div className="text-xs font-bold text-muted-foreground">
+                🎧 available to withdraw · {formatUsdc(streamingEarned, 4)} earned all-time
+              </div>
+            </div>
           </div>
-          <div className="leading-tight">
-            <div className="text-2xl font-extrabold text-[var(--blue-deep)]">
-              {formatUsdc(balance, 4)}
-            </div>
-            <div className="text-xs font-bold text-muted-foreground">
-              🎧 streaming pocket · {formatUsdc(streamingEarned, 4)} earned all-time
-            </div>
+          <div className="flex items-center gap-2">
+            <Button onClick={withdraw} disabled={withdrawing || balance <= 0} size="sm">
+              {withdrawing ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> withdrawing…
+                </>
+              ) : (
+                <>
+                  <ArrowDownToLine className="h-4 w-4" /> withdraw
+                </>
+              )}
+            </Button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button onClick={topUp} disabled={busy !== null} variant="outline" size="sm">
-            {busy === "topup" ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" /> topping up…
-              </>
-            ) : (
-              <>
-                <Wallet className="h-4 w-4" /> top up {formatUsdc(TOPUP_AMOUNT)}
-              </>
-            )}
-          </Button>
-          <Button onClick={withdraw} disabled={busy !== null || balance <= 0} size="sm">
-            {busy === "withdraw" ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" /> withdrawing…
-              </>
-            ) : (
-              <>
-                <ArrowDownToLine className="h-4 w-4" /> withdraw
-              </>
-            )}
-          </Button>
-        </div>
+
+        {activity.length > 0 && (
+          <div className="space-y-1.5 border-t border-border pt-3">
+            <p className="text-[11px] font-extrabold uppercase tracking-wide text-muted-foreground">
+              recent activity <span className="font-bold normal-case text-muted-foreground/70">· a history, not a balance</span>
+            </p>
+            {activity.map((e) => {
+              const meta =
+                ENTRY_META[e.entry_type] ?? { label: e.entry_type.toLowerCase(), positive: true };
+              const amount = Math.abs(Number(e.amount_usdc));
+              return (
+                <div key={e.id} className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-muted-foreground">
+                    {meta.label}
+                    {e.status !== "COMPLETE" && (
+                      <span className="ml-1 text-[10px] font-extrabold lowercase text-[var(--lavender-deep)]">
+                        · {e.status.toLowerCase()}
+                      </span>
+                    )}
+                    <span className="ml-1.5 font-semibold text-muted-foreground/60">
+                      {fmtWhen(e.created_at)}
+                    </span>
+                  </span>
+                  <span
+                    className={`font-bold ${
+                      meta.positive ? "text-[#3E9E68]" : "text-[var(--blue-deep)]"
+                    }`}
+                  >
+                    {meta.positive ? "+" : "−"}
+                    {formatUsdc(amount, 6)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

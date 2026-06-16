@@ -22,16 +22,8 @@ import { createSupabaseServiceClient } from "@/lib/supabase/service-client";
 import { createLicenseService } from "@/app/services/license.service";
 import { circleDeveloperSdk } from "@/lib/utils/developer-controlled-wallets-client";
 import { getCurrentUser } from "@/lib/utils/current-user";
-import {
-  ARC,
-  toUsdcUnits,
-  waitForCircleTx,
-  getJobIdFromTxHash,
-} from "@/lib/utils/arc";
 
 export const dynamic = "force-dynamic";
-
-const LICENSE_DURATION_SECONDS = 7 * 24 * 60 * 60; // 7 days
 
 /** GET /api/licenses — caller's licenses (as buyer and as work owner). */
 export async function GET() {
@@ -76,9 +68,9 @@ export async function GET() {
 }
 
 /**
- * POST /api/licenses — start licensing a work.
- * Creates the ERC-8183 job (buyer-signed) and sets its budget (agent-signed),
- * leaving the license ready to be funded.
+ * POST /api/licenses — buy a derivative license with an INSTANT direct payment.
+ * The buyer's Circle wallet pays every contributor their split immediately
+ * (no escrow), then the license is granted and download + remix unlock.
  * Body: { workId: string, amountUsdc?: number }
  */
 export async function POST(req: NextRequest) {
@@ -91,15 +83,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: "Your account has no wallet" },
       { status: 400 }
-    );
-  }
-
-  const agentAddress = process.env.NEXT_PUBLIC_AGENT_WALLET_ADDRESS;
-  const agentWalletId = process.env.NEXT_PUBLIC_AGENT_WALLET_ID;
-  if (!agentAddress || !agentWalletId) {
-    return NextResponse.json(
-      { error: "Agent wallet is not configured" },
-      { status: 500 }
     );
   }
 
@@ -153,67 +136,34 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const license = await licenseService.createLicense({
+    // Make sure the buyer can cover the price before any funds move.
+    const balResp = await circleDeveloperSdk.getWalletTokenBalance({
+      id: user.wallet.circle_wallet_id,
+      includeAll: true,
+    });
+    const walletUsdc = Number(
+      balResp.data?.tokenBalances?.find((b: any) => b.token.symbol === "USDC")?.amount ?? "0"
+    );
+    if (walletUsdc < amount) {
+      return NextResponse.json(
+        { error: `Wallet balance too low — you need ${amount} USDC. Top up and try again.` },
+        { status: 400 }
+      );
+    }
+
+    const { license, payments } = await licenseService.purchaseInstant({
       workId,
       buyerProfileId: user.profileId,
       buyerWalletId: user.wallet.id,
+      buyerCircleWalletId: user.wallet.circle_wallet_id,
       amountUsdc: amount,
     });
 
-    const expiredAt = Math.floor(Date.now() / 1000) + LICENSE_DURATION_SECONDS;
-
-    // 1. createJob — buyer is the on-chain client; agent is provider+evaluator.
-    const createJob = await circleDeveloperSdk.createContractExecutionTransaction({
-      walletId: user.wallet.circle_wallet_id,
-      contractAddress: ARC.AGENTIC_COMMERCE,
-      abiFunctionSignature: "createJob(address,address,uint256,string,address)",
-      abiParameters: [
-        agentAddress,
-        agentAddress,
-        expiredAt.toString(),
-        `License: ${work.title}`,
-        ARC.ZERO_ADDRESS,
-      ],
-      fee: { type: "level", config: { feeLevel: "MEDIUM" } },
-    });
-
-    const createJobTxId = createJob.data?.id;
-    if (!createJobTxId) throw new Error("createJob did not return a transaction id");
-
-    const { txHash } = await waitForCircleTx(createJobTxId, "createJob");
-    if (!txHash) throw new Error("createJob did not produce a tx hash");
-
-    const jobId = await getJobIdFromTxHash(txHash);
-
-    await licenseService.updateStatus(license.id, "JOB_CREATED", {
-      onchain_job_id: jobId,
-      job_tx_hash: txHash,
-    });
-
-    // 2. setBudget — agent (provider) sets the job price in USDC base units.
-    const setBudget = await circleDeveloperSdk.createContractExecutionTransaction({
-      walletId: agentWalletId,
-      contractAddress: ARC.AGENTIC_COMMERCE,
-      abiFunctionSignature: "setBudget(uint256,uint256,bytes)",
-      abiParameters: [jobId, toUsdcUnits(amount), "0x"],
-      fee: { type: "level", config: { feeLevel: "MEDIUM" } },
-    });
-
-    const setBudgetTxId = setBudget.data?.id;
-    if (setBudgetTxId) {
-      await waitForCircleTx(setBudgetTxId, "setBudget");
-    }
-
-    await licenseService.updateStatus(license.id, "BUDGETED");
-
-    return NextResponse.json(
-      { license: { ...license, status: "BUDGETED", onchain_job_id: jobId } },
-      { status: 201 }
-    );
+    return NextResponse.json({ license, payments }, { status: 201 });
   } catch (error: any) {
-    console.error("License creation failed:", error);
+    console.error("License purchase failed:", error);
     return NextResponse.json(
-      { error: `Failed to create license: ${error.message}` },
+      { error: `Failed to buy license: ${error.message}` },
       { status: 500 }
     );
   }

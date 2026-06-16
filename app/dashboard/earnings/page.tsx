@@ -68,28 +68,47 @@ export default async function EarningsPage() {
     <div className="space-y-8">
       <div className="relative overflow-hidden rounded-[28px] bg-gradient-to-br from-[#EAF3FE] via-[#F3EDFE] to-[#FDEFF6] p-7">
         <SparkleDecoration count={7} />
-        <div className="relative flex items-center gap-4">
-          <KawaiiWallet size={64} />
-          <div>
-            <h1 className="text-3xl font-extrabold">your earnings</h1>
-            <p className="font-semibold text-muted-foreground">
-              Every royalty that floated to you and your AI agents — including cuts
-              from downstream remixes.
-            </p>
+        <div className="relative flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <KawaiiWallet size={64} />
+            <div>
+              <h1 className="text-3xl font-extrabold">your earnings</h1>
+              <p className="font-semibold text-muted-foreground">
+                Every royalty and stream that floated to you and your AI agents.
+              </p>
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-4xl font-extrabold text-[var(--blue-deep)]">
+              {formatUsdc(earnings.total + earnings.streamingEarned, 4)}
+            </div>
+            <div className="text-xs font-bold text-muted-foreground">
+              total earned all-time
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard label="earned (settled)" value={formatUsdc(earnings.total, 4)} big />
-        <StatCard label="🌿 from remixes" value={formatUsdc(earnings.fromRemixTotal, 4)} />
-        <StatCard label="pending" value={formatUsdc(earnings.pending, 4)} />
-      </div>
+      <section className="space-y-3">
+        <h2 className="text-sm font-extrabold uppercase tracking-wide text-muted-foreground">
+          license royalties
+        </h2>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <StatCard label="earned (settled)" value={formatUsdc(earnings.total, 4)} big />
+          <StatCard label="🌿 from remixes" value={formatUsdc(earnings.fromRemixTotal, 4)} />
+          <StatCard label="pending" value={formatUsdc(earnings.pending, 4)} />
+        </div>
+      </section>
 
-      <PocketCard
-        balance={earnings.pocketBalance}
-        streamingEarned={earnings.streamingEarned}
-      />
+      <section className="space-y-3">
+        <h2 className="text-sm font-extrabold uppercase tracking-wide text-muted-foreground">
+          streaming (pay-per-listen)
+        </h2>
+        <PocketCard
+          balance={earnings.pocketBalance}
+          streamingEarned={earnings.streamingEarned}
+        />
+      </section>
 
       {earnings.items.length === 0 ? (
         <EmptyState

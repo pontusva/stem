@@ -2,11 +2,12 @@
 
 **stem** — *"Royalties that follow a work back through everyone who made it."*
 
-A provenance-aware royalty platform on Arc Testnet. When a creative work is licensed via
-USDC escrow, the released funds split automatically to **every** contributor in the work's
-provenance chain — including **AI contributors**, who get their own Circle wallets and
-ERC-8004 onchain identities. Every remix gives a fixed **20% upstream** to its parent chain
-(recursively), so original creators keep earning from downstream remixes.
+A provenance-aware royalty platform on Arc Testnet. Money reaches **every** contributor two
+ways: buying a **license** pays an **instant direct split** to all contributors (no escrow),
+and **streaming** charges listeners **$0.001/min** that floats to contributors via an
+internal pocket. Both honour a fixed **20% upstream** to the parent chain (recursively) —
+including **AI contributors**, who get their own Circle wallets and ERC-8004 onchain
+identities. Owners, contributors, and valid license holders stream free.
 
 This is a **proof of concept**. The core thesis is demonstrated end-to-end on live infra
 (Circle + Arc + Supabase + Anthropic). The list below is the honest gap between "working
@@ -16,44 +17,56 @@ PoC" and "production".
 
 ## Status: what's proven
 
-Two full end-to-end runs executed live on Arc Testnet through the real app routes:
+Run live on Arc Testnet through the real app routes, with real USDC moving between real
+Circle wallets:
 
-1. **Direct license** — a buyer licensed an original work (1 USDC); royalties split 50/50
-   to a human creator and an **AI agent**. Both `royalty_payments` settled `COMPLETE`
-   on-chain.
-2. **Remix license** — a buyer licensed a 3-deep remix (10 USDC); the split paid the
-   remixer 80% and sent **20% upstream** — 10% to the original human creator and 10% to the
-   upstream **AI agent** — purely because their work sits upstream in the provenance chain.
+1. **Instant license** — buying a license charges the buyer's wallet and **splits it
+   directly** to every contributor (human + **AI agent**) by their share; each
+   `royalty_payment` records `COMPLETE` and the license is granted immediately.
+2. **Remix upstream** — a remix split pays the remixer 80% and sends **20% upstream** to the
+   ancestor creators (human and AI), purely from their position in the provenance chain.
+3. **Streaming pay-per-listen** — listeners pre-fund a pocket and are metered $0.001/min;
+   the charge debits their pocket and credits each contributor's pocket; contributors
+   withdraw on-chain.
 
-The full escrow lifecycle (createJob → setBudget → approve → fund → submit → validate →
-complete → split → reconcile → CLOSED) runs against the live ERC-8183 AgenticCommerce
-contract, with real USDC moving between real Circle wallets.
+Licensing is a direct wallet-to-wallet split (the earlier ERC-8183 escrow lifecycle was
+removed); streaming movement is an internal ledger settled on top-up / withdrawal.
 
 ---
 
 ## Known limitations (intentional PoC shortcuts)
 
-### 1. Claude work-validation is currently auto-approving
-The release step calls Anthropic Claude to validate that the delivered file is a coherent
-creative work of its stated type. **The configured `ANTHROPIC_API_KEY` is out of credit**,
-so the **graceful-degradation fallback** is what actually runs — it auto-approves and the
-escrow still settles (the validation verdict records the reason). Top up the key and real
-vision-based validation runs with **zero code change**.
+### 1. No work-validation gate on purchase
+The old escrow flow ran an Anthropic Claude check before releasing funds. That gate lived in
+the (now removed) release route, so **instant licensing pays and grants without validation**.
+Re-introducing a validation step (e.g. before the split) is a deliberate future choice, not
+wired today.
 
 ### 2. Row-Level Security is disabled
 RLS is off on all tables (inherited dev convention from the boilerplate). Acceptable for a
 single-developer local demo; **must be enabled and policy-audited before any real users**.
 The service-role key currently backs most server reads/writes.
 
-### 3. Royalty reconciliation polls instead of using webhooks
-Circle's transfer webhook can't reach `localhost`, so the app **reconciles pending royalty
-payments on read** (GET poll of Circle transfer status, closing the license when all
-transfers complete). A deployed public webhook endpoint replaces the polling.
+### 3. Payments settle synchronously (no webhook)
+License splits and pocket withdrawals wait on each Circle transfer inline (`waitForCircleTx`,
+sub-second on Arc) rather than via a webhook, so `royalty_payments` are `COMPLETE` on return.
+A deployed public webhook endpoint would let payouts settle asynchronously at scale.
 
-### 4. Single hard-coded escrow agent wallet
-One env-configured agent wallet (`NEXT_PUBLIC_AGENT_WALLET_*`) acts as provider **and**
-evaluator for every escrow job. Fine for a demo; production would provision/scope agents
-per job or per marketplace.
+### 4. Single hard-coded agent / custodian wallet
+One env-configured agent wallet (`NEXT_PUBLIC_AGENT_WALLET_*`) is the **streaming pocket
+custodian** (it holds pooled pre-funded balances and pays out withdrawals). Licensing pays
+contributors directly from the buyer's wallet and doesn't route through it. Fine for a demo;
+production would scope/segregate custody.
+
+### 4a. Instant-license partial-payment risk
+Each license pays contributors in a sequential loop. If one transfer fails mid-loop, earlier
+contributors are already paid and the license is marked `FAILED` with **no auto-refund**.
+Rare on testnet with sufficient balance; noted for hardening.
+
+### 4b. Audio is auth-gated, not payment-gated
+Audio lives in a private bucket served via short-lived signed URLs, but any **authenticated**
+user can mint one — per-minute billing and the 30s preview are enforced client-side. See
+`TODO.md`.
 
 ### 5. Testnet only
 Runs on **Arc Testnet** (chainId 5042002), where USDC is the native gas token. No mainnet
@@ -90,13 +103,15 @@ gating on the demo accounts, and the demo was driven with admin-minted sessions.
    visible without login; each work page shows the contributor split and a "sign in to
    license" CTA.
 
-3. **Buy a license** *(buyer)* — Sign in as the buyer, open the work, click **Buy a license**.
-   Watch the status card walk through `createJob → setBudget → fund`. (You can't buy your
-   own work; you can't double-buy one you already own — both are guarded.)
+3. **Buy a license** *(buyer)* — Sign in as the buyer, open the work, click **Buy license**,
+   confirm. The price is **split instantly** to every contributor (incl. the AI's wallet) —
+   no escrow, no waiting — and the buyer immediately unlocks **download + remix**. (You can't
+   buy your own work; you can't double-buy one you already own — both are guarded.)
 
-4. **Release & split** — Trigger release. The agent submits the deliverable, **Claude
-   validates** it (currently auto-approved — see limitation #1), escrow completes, and the
-   royalty **fans out to every contributor**, including the AI's wallet. The license closes.
+4. **Stream it** *(a third, unlicensed account)* — Open the work and play. After a 30s
+   preview, top up the pocket and keep listening; **$0.001/min** floats to the contributors
+   (watch `/dashboard/earnings` → streaming pocket, then **withdraw**). Owners, contributors,
+   and the license holder stream **free**.
 
 5. **Make a remix** *(buyer)* — From a work you licensed, register a **remix**. The form
    auto-injects the parent's contributors scaled to a locked **20% upstream**, and sets you
@@ -123,5 +138,6 @@ from a downstream remix it never touched — because the provenance chain pays i
 | App | Next.js 14 (App Router), Tailwind v4, shadcn |
 | Data / Auth / Storage | Supabase (local Docker) |
 | Wallets & Payments | Circle Developer-Controlled Wallets (SCA) |
-| Chain | Arc Testnet — USDC native gas, ERC-8183 escrow, ERC-8004 identities, viem reads |
-| AI validation | Anthropic Claude (`claude-opus-4-8`), structured JSON verdict |
+| Payments | Instant direct license split + streaming pay-per-listen (internal pocket ledger) |
+| Chain | Arc Testnet — USDC native gas, ERC-8004 identities, viem reads |
+| AI | Anthropic Claude (`claude-opus-4-8`) — used for AI-contributor flows |

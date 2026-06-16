@@ -37,9 +37,12 @@ export async function GET() {
   const streaming = createStreamingService(service);
 
   await streaming.getOrCreatePocket(user.wallet.id, user.profileId);
+  // Aggregate across the user's own + AI-agent wallets, matching the earnings
+  // display and the withdraw scope.
+  const walletIds = await streaming.getOwnedWalletIds(user.profileId);
   const [balance, ledger] = await Promise.all([
-    streaming.getPocketBalance(user.wallet.id),
-    streaming.getLedger(user.wallet.id),
+    streaming.getPocketBalanceForWallets(walletIds),
+    streaming.getLedgerForWallets(walletIds),
   ]);
 
   return NextResponse.json({ balance, ledger, rate: STREAM_RATE_USDC_PER_MINUTE });

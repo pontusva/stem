@@ -63,7 +63,14 @@ export default async function DashboardPage() {
 
   const earnings = profile
     ? await createEarningsService(service).getEarnings(profile.id)
-    : { total: 0, pending: 0, fromRemixTotal: 0, items: [] };
+    : {
+        total: 0,
+        pending: 0,
+        fromRemixTotal: 0,
+        items: [],
+        pocketBalance: 0,
+        streamingEarned: 0,
+      };
 
   // Licenses where the user is the buyer or owns the underlying work.
   const ownedIds = works
@@ -153,10 +160,10 @@ export default async function DashboardPage() {
               <KawaiiWallet size={40} />
               <div>
                 <div className="text-2xl font-extrabold text-[var(--blue-deep)]">
-                  {formatUsdc(earnings.total, 4)}
+                  {formatUsdc(earnings.total + earnings.streamingEarned, 4)}
                 </div>
                 <div className="text-xs font-bold text-muted-foreground">
-                  earned so far
+                  earned so far (royalties + streaming)
                   {earnings.fromRemixTotal > 0 &&
                     ` · ${formatUsdc(earnings.fromRemixTotal, 4)} from remixes`}
                 </div>

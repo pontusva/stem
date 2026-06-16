@@ -103,6 +103,47 @@ export const createStreamingService = (supabase: SupabaseClient) => ({
     return data ?? [];
   },
 
+  /**
+   * The caller's pocket wallet ids: their own wallet(s) plus any AI-agent
+   * wallets they created. Used so balance, ledger, and withdraw all cover the
+   * same set (matching the earnings display).
+   */
+  async getOwnedWalletIds(profileId: string): Promise<string[]> {
+    const { data: own } = await supabase
+      .from("wallets")
+      .select("id")
+      .eq("profile_id", profileId);
+    const { data: ai } = await supabase
+      .from("wallets")
+      .select("id")
+      .eq("created_by_profile_id", profileId)
+      .eq("is_ai", true);
+    return [
+      ...(own ?? []).map((w: any) => w.id),
+      ...(ai ?? []).map((w: any) => w.id),
+    ];
+  },
+
+  async getPocketBalanceForWallets(walletIds: string[]): Promise<number> {
+    if (!walletIds.length) return 0;
+    const { data } = await supabase
+      .from("pockets")
+      .select("balance_usdc")
+      .in("wallet_id", walletIds);
+    return (data ?? []).reduce((a: number, p: any) => a + Number(p.balance_usdc), 0);
+  },
+
+  async getLedgerForWallets(walletIds: string[], limit = 50) {
+    if (!walletIds.length) return [];
+    const { data } = await supabase
+      .from("pocket_ledger")
+      .select("*")
+      .in("wallet_id", walletIds)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    return data ?? [];
+  },
+
   /** Reuse the listener's ACTIVE session for a work, or open a new one. */
   async startSession(
     workId: string,
@@ -287,84 +328,110 @@ export const createStreamingService = (supabase: SupabaseClient) => ({
   },
 
   /**
-   * Withdraw a contributor's full pocket balance on-chain (agent wallet ->
-   * their wallet). Debits the pocket optimistically, records a PENDING ledger
-   * row, transfers, then settles to COMPLETE (or refunds + FAILED on error).
+   * Withdraw the caller's full streaming pocket balance on-chain. Pockets accrue
+   * per wallet, and a creator's displayed balance spans their own wallet AND any
+   * AI-agent wallets they own (see earnings.service), so withdraw aggregates the
+   * same set of wallet ids — otherwise income sitting in an AI agent's pocket
+   * would show as a balance yet report "Nothing to withdraw". Drains every
+   * funded pocket, sends the total to `destinationAddress`, and settles the
+   * ledger (refunding on failure).
    */
   async withdraw(
-    walletId: string,
-    profileId: string | null,
+    walletIds: string[],
     destinationAddress: string
   ): Promise<{ amount: number; transferId?: string }> {
     const agentWalletId = process.env.NEXT_PUBLIC_AGENT_WALLET_ID;
     if (!agentWalletId) throw new Error("NEXT_PUBLIC_AGENT_WALLET_ID is not configured");
+    if (!walletIds.length) throw new Error("Nothing to withdraw");
 
-    const pocket = await this.getOrCreatePocket(walletId, profileId);
-    const amount = Number(pocket.balance_usdc);
-    if (amount <= 0) throw new Error("Nothing to withdraw");
-
-    // Optimistic debit: only zero the pocket if it hasn't changed.
-    const { data: debited } = await supabase
+    // Every pocket of the caller's that actually holds a balance.
+    const { data: pockets } = await supabase
       .from("pockets")
-      .update({ balance_usdc: 0 })
-      .eq("wallet_id", walletId)
-      .eq("balance_usdc", pocket.balance_usdc)
-      .select();
-    if (!debited || debited.length === 0) {
+      .select("wallet_id, profile_id, balance_usdc")
+      .in("wallet_id", walletIds)
+      .gt("balance_usdc", 0);
+    const funded = (pockets ?? []).filter((p: any) => Number(p.balance_usdc) > 0);
+    if (!funded.length) throw new Error("Nothing to withdraw");
+
+    // Optimistically drain each pocket (skip any that changed under us).
+    const drained: { wallet_id: string; profile_id: string | null; amount: number }[] = [];
+    for (const p of funded) {
+      const { data } = await supabase
+        .from("pockets")
+        .update({ balance_usdc: 0 })
+        .eq("wallet_id", p.wallet_id)
+        .eq("balance_usdc", p.balance_usdc)
+        .select();
+      if (data && data.length > 0) {
+        drained.push({
+          wallet_id: p.wallet_id,
+          profile_id: p.profile_id,
+          amount: Number(p.balance_usdc),
+        });
+      }
+    }
+    const total =
+      Math.round(drained.reduce((a, d) => a + d.amount, 0) * 1_000_000) / 1_000_000;
+    if (total <= 0) {
       throw new Error("Pocket balance changed — please retry the withdrawal");
     }
 
-    const { data: ledgerRow } = await supabase
+    // One PENDING ledger row per drained pocket.
+    const { data: ledgerRows } = await supabase
       .from("pocket_ledger")
-      .insert({
-        wallet_id: walletId,
-        profile_id: profileId,
-        entry_type: "WITHDRAWAL",
-        amount_usdc: -amount,
-        status: "PENDING",
-      })
-      .select()
-      .single();
+      .insert(
+        drained.map((d) => ({
+          wallet_id: d.wallet_id,
+          profile_id: d.profile_id,
+          entry_type: "WITHDRAWAL",
+          amount_usdc: -d.amount,
+          status: "PENDING",
+        }))
+      )
+      .select();
+    const ledgerIds = (ledgerRows ?? []).map((r: any) => r.id);
 
     try {
       const transfer = await circleDeveloperSdk.createTransaction({
         walletId: agentWalletId,
         destinationAddress,
-        amount: [amount.toFixed(6)],
+        amount: [total.toFixed(6)],
         tokenAddress: ARC.USDC,
         blockchain: ARC.BLOCKCHAIN as any,
         fee: { type: "level", config: { feeLevel: "MEDIUM" } },
       });
       const transferId = transfer.data?.id;
-      if (ledgerRow) {
+      if (transferId && ledgerIds.length) {
         await supabase
           .from("pocket_ledger")
           .update({ circle_transfer_id: transferId })
-          .eq("id", ledgerRow.id);
+          .in("id", ledgerIds);
       }
       if (!transferId) throw new Error("withdrawal did not return a transaction id");
 
       await waitForCircleTx(transferId, "pocket withdrawal");
-      if (ledgerRow) {
+      if (ledgerIds.length) {
         await supabase
           .from("pocket_ledger")
           .update({ status: "COMPLETE" })
-          .eq("id", ledgerRow.id);
+          .in("id", ledgerIds);
       }
-      return { amount, transferId };
+      return { amount: total, transferId };
     } catch (err) {
-      // Refund the pocket (add back, in case credits arrived meanwhile) and
-      // mark the ledger row FAILED.
-      const fresh = await this.getPocketBalance(walletId);
-      await supabase
-        .from("pockets")
-        .update({ balance_usdc: Math.round((fresh + amount) * 1_000_000) / 1_000_000 })
-        .eq("wallet_id", walletId);
-      if (ledgerRow) {
+      // Refund each drained pocket (add back, in case credits arrived meanwhile)
+      // and mark the ledger rows FAILED.
+      for (const d of drained) {
+        const fresh = await this.getPocketBalance(d.wallet_id);
+        await supabase
+          .from("pockets")
+          .update({ balance_usdc: Math.round((fresh + d.amount) * 1_000_000) / 1_000_000 })
+          .eq("wallet_id", d.wallet_id);
+      }
+      if (ledgerIds.length) {
         await supabase
           .from("pocket_ledger")
           .update({ status: "FAILED" })
-          .eq("id", ledgerRow.id);
+          .in("id", ledgerIds);
       }
       throw err;
     }

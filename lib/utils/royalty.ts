@@ -124,14 +124,24 @@ export function splitsAreValid(
  *   - 2 → license / escrow / wallet-transaction amounts (the larger numbers)
  *   - 4 → earnings & pocket balances (e.g. "$0.0010")
  *   - 6 → the streaming meter, so a $0.001/min charge or $0.000300 split is visible
+ *
+ * The amount is TRUNCATED (toward zero) to `decimals`, never rounded up, so a
+ * balance is never shown as more than it actually is (e.g. $40.005 → "$40.00",
+ * not "$40.01"). Truncation is done in integer micro-USDC to dodge float error.
  */
 export function formatUsdc(amount: number | string, decimals = 2): string {
   const n = typeof amount === "string" ? parseFloat(amount) : amount;
   const value = Number.isFinite(n) ? n : 0;
+
+  // Snap to USDC's 6-dp base units, then truncate to the displayed precision.
+  const micros = Math.round(value * 1_000_000);
+  const perUnit = decimals >= 6 ? 1 : 10 ** (6 - decimals);
+  const truncated = (Math.trunc(micros / perUnit) * perUnit) / 1_000_000;
+
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
-  }).format(value);
+  }).format(truncated);
 }

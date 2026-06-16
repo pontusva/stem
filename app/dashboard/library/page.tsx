@@ -25,6 +25,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/kawaii/empty-state";
 import { StemCloud } from "@/components/kawaii/stem-cloud";
 import { SparkleDecoration } from "@/components/kawaii/sparkle-decoration";
+import { LicensedAudio } from "@/components/licensed-audio";
 import { formatUsdc } from "@/lib/utils/royalty";
 
 export const dynamic = "force-dynamic";
@@ -123,7 +124,7 @@ export default async function LibraryPage() {
                 <CardContent className="space-y-3">
                   {/* the actual media */}
                   {work.file_url && AUDIO_EXT.includes(ext) ? (
-                    <audio controls className="w-full" src={work.file_url} />
+                    <LicensedAudio workId={work.id} title={work.title} />
                   ) : work.file_url && IMAGE_EXT.includes(ext) ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img

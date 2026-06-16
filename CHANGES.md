@@ -70,6 +70,34 @@ original `LICENSE` is unchanged and continues to govern this repository.
 - **Modified:** `app/services/license.service.ts` (createLicense, status, reconcile,
   `fanOutRoyalties`), `app/api/webhooks/circle/route.ts` (royalty transfer reconciliation).
 
+### Changed: licensing — ERC-8183 escrow → instant direct payment *(supersedes the above)*
+- The multi-step escrow flow (createJob → fund → submit → validate → release → fan-out) was
+  **removed** for derivative-license purchases. Buying a license now charges the buyer's
+  Circle wallet and **splits it instantly** to every contributor; the license is granted
+  immediately and unlocks download + remix.
+- **Removed:** `app/api/licenses/[id]/fund/route.ts`, `app/api/licenses/[id]/release/route.ts`.
+- **Modified:** `app/api/licenses/route.ts` (POST now does balance-check → instant split),
+  `app/services/license.service.ts` (`fanOutRoyalties` replaced by `purchaseInstant`).
+- **Modified:** `components/license-work-button.tsx` (confirm dialog + instant buy),
+  `components/license-status-card.tsx` (multi-step stepper → static receipt).
+- The on-chain AI **validation gate** (Claude) lived in the deleted release route and no
+  longer runs on the purchase path.
+
+### New: streaming pay-per-listen (Mode 1 — internal pocket)
+- **New migration** `supabase/migrations/20260616000000_streaming_payments.sql` — `pockets`,
+  `stream_sessions`, `pocket_ledger` + an atomic `charge_stream_minutes` function; RLS
+  SELECT-only; realtime.
+- **New migration** `supabase/migrations/20260616120000_stems_private.sql` — makes the audio
+  bucket private (added by `20260615120000_stems_audio_bucket.sql`); `20260615123000_works_duration_seconds.sql`
+  stores track length.
+- **New:** `app/services/streaming.service.ts`, `lib/utils/streaming.ts`, routes
+  `app/api/works/[id]/stream`, `app/api/works/[id]/audio-url` (signed URLs), `app/api/pocket{,/topup,/withdraw}`.
+- **New:** `components/audio-player.tsx`, `streaming-audio-player.tsx`, `licensed-audio.tsx`,
+  `pocket-card.tsx`, `download-button.tsx`. Audio is gated behind auth via signed URLs;
+  owners, contributors, and license holders stream free.
+- **Changed:** `lib/utils/royalty.ts` `formatUsdc` now truncates (never rounds up) and takes a
+  decimals arg; all USDC displays route through it.
+
 ### New: works, marketplace, library, earnings
 - **New:** `app/services/works.service.ts` (modified — listWorks w/ stats, provenance chain,
   downstream stats), `app/services/earnings.service.ts`.

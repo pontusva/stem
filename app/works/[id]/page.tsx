@@ -32,6 +32,7 @@ import { LicenseWorkButton } from "@/components/license-work-button";
 import { ShareWorkButton } from "@/components/share-work-button";
 import { WorkFileUpload } from "@/components/work-file-upload";
 import { StreamingAudioPlayer } from "@/components/streaming-audio-player";
+import { DownloadButton } from "@/components/download-button";
 import { computeSplitAmounts, formatUsdc, UPSTREAM_SHARE_PCT } from "@/lib/utils/royalty";
 
 export const dynamic = "force-dynamic";
@@ -165,7 +166,7 @@ export default async function WorkDetailPage({
             </span>
           )}
         </div>
-        {user && (
+        {user && (isOwner || alreadyLicensed) && (
           <Button asChild variant="outline">
             <Link href={`/dashboard/works/new?parent=${work.id}`}>
               <GitBranch className="h-4 w-4" />
@@ -202,9 +203,11 @@ export default async function WorkDetailPage({
             ) : isAudio && work.file_url ? (
               <StreamingAudioPlayer
                 workId={work.id}
-                src={work.file_url}
                 title={work.title}
-                free={isOwner || viewerSplit > 0}
+                // Owners, contributors, and anyone holding a valid license
+                // stream free — no per-minute charge.
+                free={isOwner || viewerSplit > 0 || alreadyLicensed}
+                freeReason={isOwner || viewerSplit > 0 ? "creator" : "licensed"}
                 signedIn={!!user}
               />
             ) : hasFile ? (
@@ -230,8 +233,16 @@ export default async function WorkDetailPage({
             ) : user && alreadyLicensed ? (
               <div className="space-y-2 rounded-2xl bg-[#D6F5E3]/50 p-4 text-center">
                 <p className="flex items-center justify-center gap-2 text-sm font-extrabold text-[#3E9E68]">
-                  <Check className="h-4 w-4" /> you already own a license
+                  <Check className="h-4 w-4" /> license owned — download &amp; remix unlocked
                 </p>
+                {hasFile && (
+                  <DownloadButton workId={work.id} fileUrl={work.file_url!} />
+                )}
+                <Button asChild variant="outline" className="w-full">
+                  <Link href={`/dashboard/works/new?parent=${work.id}`}>
+                    <GitBranch className="h-4 w-4" /> remix this stem
+                  </Link>
+                </Button>
                 <Button asChild variant="outline" className="w-full">
                   <Link href="/dashboard/library">
                     <Headphones className="h-4 w-4" /> open in your library

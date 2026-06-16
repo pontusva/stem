@@ -21,31 +21,43 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Loader2, LogIn, Wallet } from "lucide-react";
+import { Loader2, Lock, LogIn, Wallet } from "lucide-react";
 import { AudioPlayer } from "@/components/audio-player";
 import { Button } from "@/components/ui/button";
 import { formatUsdc } from "@/lib/utils/royalty";
 import { STREAM_RATE_USDC_PER_MINUTE } from "@/lib/utils/streaming";
 
 const TOPUP_AMOUNT = 1; // USDC per top-up tap
-const PREVIEW_SECONDS = 30; // free preview for signed-out listeners
 
 interface Props {
   workId: string;
-  src: string;
   title?: string;
-  /** Owner or contributor of this work — listens free, no meter. */
+  /** Owner, contributor, or license holder — listens free, no meter. */
   free?: boolean;
+  /** Why listening is free, for the right note copy. */
+  freeReason?: "creator" | "licensed";
   signedIn?: boolean;
 }
 
 /**
  * Pay-per-listen wrapper around AudioPlayer (Mode 1, internal pocket).
- * Meters real listening via onSecondsPlayed and charges $0.001/min through the
- * /api/works/[id]/stream heartbeat, debiting the listener's pocket and crediting
- * contributors. Pauses and prompts a top-up when the pocket runs dry.
+ *
+ * Audio bytes live in a private bucket: this component pulls a short-lived
+ * signed URL from /api/works/[id]/audio-url (authenticated callers only) and
+ * refreshes it as it nears expiry / on media errors. Signed-out users never get
+ * a URL — they see a locked sign-in card and no audio element at all.
+ *
+ * For signed-in listeners it meters real listening and charges $0.001/min via
+ * /api/works/[id]/stream, pausing with a top-up prompt when the pocket runs dry.
  */
-export function StreamingAudioPlayer({ workId, src, title, free, signedIn }: Props) {
+export function StreamingAudioPlayer({
+  workId,
+  title,
+  free,
+  freeReason = "creator",
+  signedIn,
+}: Props) {
+  const [audioSrc, setAudioSrc] = useState<string | null>(null);
   const [pocketBalance, setPocketBalance] = useState(0);
   const [paidThisSession, setPaidThisSession] = useState(0);
   const [blocked, setBlocked] = useState(false);
@@ -55,11 +67,43 @@ export function StreamingAudioPlayer({ workId, src, title, free, signedIn }: Pro
   const chargedMinuteRef = useRef(0);
   const inFlightRef = useRef(false);
   const blockedRef = useRef(false);
-  const meter = !free && signedIn;
+
+  // Signed-URL lifecycle.
+  const urlMintedAtRef = useRef(0);
+  const urlTtlRef = useRef(60);
+  const urlInFlightRef = useRef(false);
+  const lastErrorRefreshRef = useRef(0);
+
+  const meter = !free && !!signedIn; // owner/contributor & signed-out never metered
 
   useEffect(() => {
     blockedRef.current = blocked;
   }, [blocked]);
+
+  // Mint a fresh signed URL (authenticated users only).
+  const fetchSignedUrl = useCallback(async () => {
+    if (urlInFlightRef.current) return;
+    urlInFlightRef.current = true;
+    try {
+      const res = await fetch(`/api/works/${workId}/audio-url`);
+      if (!res.ok) return;
+      const json = await res.json();
+      if (json.url) {
+        urlMintedAtRef.current = Date.now();
+        urlTtlRef.current = Number(json.expiresIn) || 60;
+        setAudioSrc(json.url);
+      }
+    } catch {
+      // transient — a later play/error will retry
+    } finally {
+      urlInFlightRef.current = false;
+    }
+  }, [workId]);
+
+  // Get the first signed URL once we know the viewer is authenticated.
+  useEffect(() => {
+    if (signedIn) fetchSignedUrl();
+  }, [signedIn, fetchSignedUrl]);
 
   // Load the listener's current pocket balance up front.
   useEffect(() => {
@@ -96,7 +140,6 @@ export function StreamingAudioPlayer({ workId, src, title, free, signedIn }: Pro
         }
         setPocketBalance(Number(json.pocketBalance) || 0);
         setPaidThisSession(Number(json.amountCharged) || 0);
-        // Keep the client's minute cursor in sync with the server's truth.
         chargedMinuteRef.current = Number(json.minutesCharged) || 0;
         if (json.paused) {
           setBlocked(true);
@@ -111,41 +154,44 @@ export function StreamingAudioPlayer({ workId, src, title, free, signedIn }: Pro
     [workId]
   );
 
-  // Cumulative listened seconds → enforce the auth gate, then charge per minute.
+  // Cumulative listened seconds → charge each newly-completed minute (first 60s free).
   const handleSeconds = useCallback(
     (seconds: number) => {
       secondsRef.current = seconds;
-      if (free) return; // owner / contributor — unlimited free listening
-
-      if (!signedIn) {
-        // Signed-out: a 30-second preview, then pause behind the sign-in gate.
-        if (seconds >= PREVIEW_SECONDS && !blockedRef.current) {
-          setBlocked(true);
-        }
-        return;
-      }
-
-      // Signed-in: the first completed minute (60s) is free; from then on each
-      // new minute fires a charge. An empty pocket comes back `paused` from the
-      // server and blocks playback with a top-up prompt.
+      if (free) return; // owner / contributor listen free
       const minute = Math.floor(seconds / 60);
       if (minute > chargedMinuteRef.current && !inFlightRef.current && !blockedRef.current) {
         heartbeat(false);
       }
     },
-    [free, signedIn, heartbeat]
+    [free, heartbeat]
   );
 
-  // Settle completed minutes when playback pauses.
   const handlePlayingChange = useCallback(
     (playing: boolean) => {
-      if (!meter) return;
-      if (!playing) heartbeat(false);
+      if (playing) {
+        // Refresh a near-expired signed URL when (re)starting playback.
+        const age = Date.now() - urlMintedAtRef.current;
+        if (age > (urlTtlRef.current - 10) * 1000) fetchSignedUrl();
+        return;
+      }
+      // Paused — settle completed minutes (paying listeners only).
+      if (meter) heartbeat(false);
     },
-    [meter, heartbeat]
+    [meter, heartbeat, fetchSignedUrl]
   );
 
-  // Final settle on navigation away / unmount.
+  // An expired signed URL surfaces as a media error mid-playback — re-sign and
+  // let AudioPlayer resume from where it was (with a short cooldown vs loops).
+  const handleAudioError = useCallback(() => {
+    if (!signedIn) return;
+    const now = Date.now();
+    if (now - lastErrorRefreshRef.current < 3000) return;
+    lastErrorRefreshRef.current = now;
+    fetchSignedUrl();
+  }, [signedIn, fetchSignedUrl]);
+
+  // Final settle on navigation away / unmount (paying listeners only).
   useEffect(() => {
     if (!meter) return;
     function flush() {
@@ -185,43 +231,49 @@ export function StreamingAudioPlayer({ workId, src, title, free, signedIn }: Pro
     }
   }
 
+  // Signed-out: no signed URL, no audio element — a hard sign-in wall.
+  if (!signedIn) {
+    return (
+      <div className="space-y-2 rounded-2xl border-[1.5px] border-border bg-gradient-to-br from-[#EAF3FE] to-[#F3EDFE] p-5 text-center shadow-[var(--shadow-cloud-sm)]">
+        <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-white/70">
+          <Lock className="h-5 w-5 text-[var(--blue-deep)]" />
+        </div>
+        <p className="text-sm font-extrabold">sign in to listen 🎵</p>
+        <p className="text-xs font-semibold text-muted-foreground">
+          this stem streams for supporters — {formatUsdc(STREAM_RATE_USDC_PER_MINUTE, 6)}/min.
+        </p>
+        <Button asChild className="mt-1">
+          <Link href="/sign-in">
+            <LogIn className="h-4 w-4" /> sign in
+          </Link>
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3">
-      <AudioPlayer
-        src={src}
-        title={title}
-        onSecondsPlayed={handleSeconds}
-        onPlayingChange={handlePlayingChange}
-        blocked={blocked}
-      />
+      {audioSrc ? (
+        <AudioPlayer
+          src={audioSrc}
+          title={title}
+          onSecondsPlayed={handleSeconds}
+          onPlayingChange={handlePlayingChange}
+          onError={handleAudioError}
+          blocked={blocked}
+        />
+      ) : (
+        <div className="flex h-[120px] items-center justify-center rounded-2xl border-[1.5px] border-border bg-gradient-to-br from-[#EAF3FE] to-[#F3EDFE]">
+          <Loader2 className="h-5 w-5 animate-spin text-[var(--blue-deep)]" />
+        </div>
+      )}
 
       {free ? (
         <p className="rounded-2xl bg-secondary/30 p-3 text-xs font-bold text-secondary-foreground">
-          ✿ you&apos;re a creator on this stem — listening&apos;s on us.
+          {freeReason === "licensed"
+            ? "✿ you own a license for this stem — listen all you like, no charge."
+            : "✿ you're a creator on this stem — listening's on us."}
         </p>
-      ) : !signedIn ? (
-        <div
-          className={`flex flex-wrap items-center justify-between gap-2 rounded-2xl p-3 ${
-            blocked
-              ? "bg-gradient-to-br from-[#FDEFF6] to-[#F3EDFE] shadow-[var(--shadow-cloud-sm)]"
-              : "bg-gradient-to-br from-[#EAF3FE] to-[#F3EDFE]"
-          }`}
-        >
-          <p
-            className={`text-xs font-bold ${
-              blocked ? "text-accent-foreground" : "text-muted-foreground"
-            }`}
-          >
-            {blocked
-              ? "sign in to support this artist 🎵"
-              : `🎵 ${PREVIEW_SECONDS}-second preview · sign in to keep listening & support the artist`}
-          </p>
-          <Button asChild size="sm" variant={blocked ? "default" : "outline"}>
-            <Link href="/sign-in">
-              <LogIn className="h-4 w-4" /> sign in
-            </Link>
-          </Button>
-        </div>
       ) : (
         <div className="rounded-2xl border-[1.5px] border-border bg-card/70 p-3">
           <div className="flex items-center justify-between text-xs font-bold text-muted-foreground">

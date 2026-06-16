@@ -40,9 +40,12 @@ export async function POST() {
   const streaming = createStreamingService(service);
 
   try {
+    // The withdrawable set must match what the earnings card sums: the user's
+    // own wallet(s) PLUS the AI-agent wallets they created.
+    const walletIds = await streaming.getOwnedWalletIds(user.profileId);
+
     const { amount, transferId } = await streaming.withdraw(
-      user.wallet.id,
-      user.profileId,
+      walletIds,
       user.wallet.wallet_address
     );
     return NextResponse.json({ amount, transferId });

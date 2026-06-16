@@ -18,7 +18,7 @@
 
 import { SupabaseClient } from "@supabase/supabase-js";
 import { circleDeveloperSdk } from "@/lib/utils/developer-controlled-wallets-client";
-import { ARC } from "@/lib/utils/arc";
+import { ARC, waitForCircleTx } from "@/lib/utils/arc";
 import { computeSplitAmounts } from "@/lib/utils/royalty";
 import { License, LicenseStatus, LicenseWithDetails } from "@/types/royalty";
 
@@ -145,23 +145,29 @@ export const createLicenseService = (supabase: SupabaseClient) => ({
   },
 
   /**
-   * Fan out the escrowed USDC (now held by the agent wallet) to every
-   * contributor of the work, proportional to their split. Each leg is a Circle
-   * wallet-to-wallet transfer; the webhook flips each royalty_payment to
-   * COMPLETE and closes the license once all legs settle.
+   * Instant derivative-license purchase — no escrow. The buyer's own Circle
+   * wallet pays each contributor their split directly (one wallet-to-wallet USDC
+   * transfer per contributor, proportional to split_pct), then the license is
+   * granted (CLOSED). A COMPLETE royalty_payment is recorded per contributor so
+   * earnings reflect it immediately. If any leg fails the license is marked
+   * FAILED and the error is rethrown (note: earlier legs may already be paid).
    */
-  async fanOutRoyalties(licenseId: string): Promise<{
+  async purchaseInstant(params: {
+    workId: string;
+    buyerProfileId: string;
+    buyerWalletId: string;
+    buyerCircleWalletId: string;
+    amountUsdc: number;
+  }): Promise<{
+    license: License;
     payments: { contributorId: string; amount: number; transferId?: string }[];
   }> {
-    const license = await this.getLicense(licenseId);
-    if (!license) throw new Error("License not found");
-
     const { data: contributors, error: contribError } = await supabase
       .from("contributors")
       .select(
         `*, wallet:wallets!contributors_wallet_id_fkey ( id, wallet_address )`
       )
-      .eq("work_id", license.work_id)
+      .eq("work_id", params.workId)
       .order("split_pct", { ascending: false });
 
     if (contribError) {
@@ -171,14 +177,14 @@ export const createLicenseService = (supabase: SupabaseClient) => ({
       throw new Error("Work has no contributors to pay");
     }
 
-    const agentWalletId = process.env.NEXT_PUBLIC_AGENT_WALLET_ID;
-    if (!agentWalletId) {
-      throw new Error("NEXT_PUBLIC_AGENT_WALLET_ID is not configured");
-    }
+    const amounts = computeSplitAmounts(params.amountUsdc, contributors as any[]);
 
-    const amounts = computeSplitAmounts(license.amount_usdc, contributors as any[]);
-
-    await this.updateStatus(licenseId, "SPLITTING");
+    const license = await this.createLicense({
+      workId: params.workId,
+      buyerProfileId: params.buyerProfileId,
+      buyerWalletId: params.buyerWalletId,
+      amountUsdc: params.amountUsdc,
+    });
 
     const results: {
       contributorId: string;
@@ -186,40 +192,49 @@ export const createLicenseService = (supabase: SupabaseClient) => ({
       transferId?: string;
     }[] = [];
 
-    for (let i = 0; i < contributors.length; i++) {
-      const contributor = contributors[i] as any;
-      const amount = amounts[i];
-      const destinationAddress = contributor.wallet?.wallet_address;
+    try {
+      for (let i = 0; i < contributors.length; i++) {
+        const contributor = contributors[i] as any;
+        const amount = amounts[i];
+        const destinationAddress = contributor.wallet?.wallet_address;
 
-      if (!destinationAddress || amount <= 0) {
-        results.push({ contributorId: contributor.id, amount });
-        continue;
+        if (!destinationAddress || amount <= 0) {
+          results.push({ contributorId: contributor.id, amount });
+          continue;
+        }
+
+        const transfer = await circleDeveloperSdk.createTransaction({
+          walletId: params.buyerCircleWalletId,
+          destinationAddress,
+          amount: [amount.toFixed(6)],
+          tokenAddress: ARC.USDC,
+          blockchain: ARC.BLOCKCHAIN as any,
+          fee: { type: "level", config: { feeLevel: "MEDIUM" } },
+        });
+
+        const transferId = transfer.data?.id;
+        if (transferId) {
+          await waitForCircleTx(transferId, `pay ${contributor.display_name}`);
+        }
+
+        await supabase.from("royalty_payments").insert({
+          license_id: license.id,
+          contributor_id: contributor.id,
+          wallet_id: contributor.wallet_id,
+          amount_usdc: amount,
+          split_pct: contributor.split_pct,
+          circle_transfer_id: transferId,
+          status: "COMPLETE",
+        });
+
+        results.push({ contributorId: contributor.id, amount, transferId });
       }
-
-      const transfer = await circleDeveloperSdk.createTransaction({
-        walletId: agentWalletId,
-        destinationAddress,
-        amount: [amount.toFixed(6)],
-        tokenAddress: ARC.USDC,
-        blockchain: ARC.BLOCKCHAIN as any,
-        fee: { type: "level", config: { feeLevel: "MEDIUM" } },
-      });
-
-      const transferId = transfer.data?.id;
-
-      await supabase.from("royalty_payments").insert({
-        license_id: licenseId,
-        contributor_id: contributor.id,
-        wallet_id: contributor.wallet_id,
-        amount_usdc: amount,
-        split_pct: contributor.split_pct,
-        circle_transfer_id: transferId,
-        status: "PENDING",
-      });
-
-      results.push({ contributorId: contributor.id, amount, transferId });
+    } catch (err) {
+      await this.updateStatus(license.id, "FAILED");
+      throw err;
     }
 
-    return { payments: results };
+    await this.updateStatus(license.id, "CLOSED");
+    return { license: { ...license, status: "CLOSED" }, payments: results };
   },
 });

@@ -21,8 +21,18 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { formatUsdc } from "@/lib/utils/royalty";
 
 interface Props {
@@ -31,11 +41,17 @@ interface Props {
   disabled?: boolean;
 }
 
+/**
+ * Buy a derivative license with an instant, direct split payment. A confirm
+ * dialog precedes the charge; on success the buyer's pocket pays every
+ * contributor and the license is granted (download + remix unlock).
+ */
 export function LicenseWorkButton({ workId, price, disabled }: Props) {
   const router = useRouter();
+  const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  async function handleLicense() {
+  async function buy() {
     setLoading(true);
     try {
       const res = await fetch("/api/licenses", {
@@ -44,26 +60,48 @@ export function LicenseWorkButton({ workId, price, disabled }: Props) {
         body: JSON.stringify({ workId }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to start license");
-      toast.success("Escrow job created on Arc");
-      router.push(`/dashboard/licenses/${json.license.id}`);
+      if (!res.ok) throw new Error(json.error || "Purchase failed");
+      toast.success("License granted — download & remix unlocked! ✨");
+      setOpen(false);
       router.refresh();
     } catch (err: any) {
-      toast.error(err.message || "Failed to start license");
+      toast.error(err.message || "Purchase failed");
+    } finally {
       setLoading(false);
     }
   }
 
   return (
-    <Button onClick={handleLicense} disabled={loading || disabled} className="w-full">
-      {loading ? (
-        <>
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          Creating escrow job…
-        </>
-      ) : (
-        `Buy a license · ${formatUsdc(price)}`
-      )}
-    </Button>
+    <AlertDialog open={open} onOpenChange={(o) => !loading && setOpen(o)}>
+      <AlertDialogTrigger asChild>
+        <Button disabled={disabled} className="w-full">
+          Buy license · {formatUsdc(price)}
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Buy this license for {formatUsdc(price)}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Your {formatUsdc(price)} is paid instantly from your pocket and split to
+            every contributor (human &amp; AI) by their share. You&apos;ll unlock download
+            and remix rights right away — no escrow, no waiting.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={loading}>Cancel</AlertDialogCancel>
+          <Button onClick={buy} disabled={loading}>
+            {loading ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" /> paying contributors…
+              </>
+            ) : (
+              <>
+                <Sparkles className="h-4 w-4" /> Confirm &amp; pay {formatUsdc(price)}
+              </>
+            )}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

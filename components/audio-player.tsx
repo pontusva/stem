@@ -58,6 +58,8 @@ interface Props {
   blocked?: boolean;
   /** Surfaces play/pause transitions to a parent (e.g. to flush a charge on pause). */
   onPlayingChange?: (playing: boolean) => void;
+  /** Fired on a media error (e.g. an expired signed URL) so the parent can re-sign. */
+  onError?: () => void;
 }
 
 /**
@@ -72,9 +74,14 @@ export function AudioPlayer({
   onSecondsPlayed,
   blocked = false,
   onPlayingChange,
+  onError,
 }: Props) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const lastTimeRef = useRef(0);
+  // For seamless signed-URL rotation: when `src` changes for the *same* track,
+  // remember where we were so playback resumes from there after the reload.
+  const prevSrcRef = useRef(src);
+  const resumeRef = useRef<{ time: number; playing: boolean } | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -96,6 +103,17 @@ export function AudioPlayer({
       audioRef.current.pause();
     }
   }, [blocked]);
+
+  // The src changed because the signed URL was refreshed (not a new track):
+  // capture position + play state, then reload so the new URL takes effect.
+  // Restoration happens in onLoadedMetadata.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || prevSrcRef.current === src) return;
+    resumeRef.current = { time: audio.currentTime, playing: !audio.paused };
+    prevSrcRef.current = src;
+    audio.load();
+  }, [src]);
 
   function handleTimeUpdate() {
     const audio = audioRef.current;
@@ -202,8 +220,24 @@ export function AudioPlayer({
         preload="metadata"
         controlsList="nodownload"
         onContextMenu={(e) => e.preventDefault()}
-        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+        onLoadedMetadata={(e) => {
+          const el = e.currentTarget;
+          setDuration(el.duration);
+          // Restore position after a signed-URL refresh.
+          const resume = resumeRef.current;
+          if (resume) {
+            try {
+              el.currentTime = resume.time;
+            } catch {
+              // ignore if the new stream isn't seekable yet
+            }
+            lastTimeRef.current = resume.time;
+            if (resume.playing && !blocked) el.play().catch(() => {});
+            resumeRef.current = null;
+          }
+        }}
         onTimeUpdate={handleTimeUpdate}
+        onError={() => onError?.()}
         onPlay={() => {
           setIsPlaying(true);
           onPlayingChange?.(true);

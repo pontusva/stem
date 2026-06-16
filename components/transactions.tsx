@@ -41,6 +41,7 @@ import {
   PaginationPrevious,
 } from "@/components/ui/pagination";
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser-client";
+import { formatUsdc } from "@/lib/utils/royalty";
 import { Skeleton } from "@/components/ui/skeleton";
 
 interface Transaction {
@@ -187,12 +188,7 @@ export const Transactions: FunctionComponent<Props> = (props) => {
       data.map((transaction) => ({
         ...transaction,
         created_at: new Date(transaction.created_at).toLocaleString(),
-        amount: new Intl.NumberFormat("en-US", {
-          style: "currency",
-          currency: "USD",
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        }).format(Number(transaction.amount)),
+        amount: formatUsdc(Number(transaction.amount), 2),
       })),
     [data]
   );
