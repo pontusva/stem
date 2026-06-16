@@ -85,7 +85,7 @@ export function WorkCard({ work }: { work: WorkWithContributors }) {
 
           {(work.licenses_count ?? 0) > 0 && (
             <div className="flex items-center gap-2 rounded-full bg-[#D6F5E3]/60 px-3 py-1 text-xs font-extrabold text-[#3E9E68]">
-              licensed {work.licenses_count}× · {formatUsdc(work.earned ?? 0)} paid out
+              licensed {work.licenses_count}× · {formatUsdc(work.earned ?? 0, 4)} paid out
             </div>
           )}
         </CardContent>

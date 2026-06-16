@@ -161,7 +161,7 @@ export default async function WorkDetailPage({
             <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-[#D6F5E3]/60 px-3 py-1 text-xs font-extrabold text-[#3E9E68]">
               🌿 remixed {downstream.remixCount}×
               {downstream.downstreamEarned > 0 &&
-                ` · ${formatUsdc(downstream.downstreamEarned)} earned downstream`}
+                ` · ${formatUsdc(downstream.downstreamEarned, 4)} earned downstream`}
             </span>
           )}
         </div>

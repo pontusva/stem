@@ -68,7 +68,7 @@ export function PocketCard({
       const res = await fetch("/api/pocket/withdraw", { method: "POST" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Withdrawal failed");
-      toast.success(`Withdrew ${formatUsdc(json.amount)} to your wallet`);
+      toast.success(`Withdrew ${formatUsdc(json.amount, 4)} to your wallet`);
       router.refresh();
     } catch (err: any) {
       toast.error(err.message || "Withdrawal failed");
@@ -86,10 +86,10 @@ export function PocketCard({
           </div>
           <div className="leading-tight">
             <div className="text-2xl font-extrabold text-[var(--blue-deep)]">
-              {formatUsdc(balance)}
+              {formatUsdc(balance, 4)}
             </div>
             <div className="text-xs font-bold text-muted-foreground">
-              🎧 streaming pocket · {formatUsdc(streamingEarned)} earned all-time
+              🎧 streaming pocket · {formatUsdc(streamingEarned, 4)} earned all-time
             </div>
           </div>
         </div>

@@ -19,6 +19,7 @@
 "use client";
 
 import { useWalletBalance } from "@/app/hooks/useWalletBalance";
+import { formatUsdc } from "@/lib/utils/royalty";
 import { Skeleton } from "./ui/skeleton";
 
 interface WalletBalanceProps {
@@ -32,12 +33,7 @@ export function WalletBalance({ walletId }: WalletBalanceProps) {
     return <Skeleton className="w-[103px] h-[28px] rounded-full" />;
   }
 
-  const formattedBalance = new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(balance);
-
-  return formattedBalance;
+  // The main Circle wallet balance ("my pocket") holds larger bought USDC — keep
+  // it at 2 dp. The small streaming pocket ledger uses 4 dp elsewhere.
+  return formatUsdc(balance, 2);
 }

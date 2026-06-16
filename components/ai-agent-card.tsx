@@ -106,7 +106,7 @@ export function AiAgentCard({ agent }: { agent: AiAgentWithStats }) {
           <Stat icon={<Music className="h-4 w-4" />} value={String(agent.works_count)} label="works" />
           <Stat
             icon={<Coins className="h-4 w-4" />}
-            value={formatUsdc(agent.total_earned)}
+            value={formatUsdc(agent.total_earned, 4)}
             label="earned"
           />
           <Stat value={joined} label="joined" />

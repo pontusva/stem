@@ -81,9 +81,9 @@ export default async function EarningsPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatCard label="earned (settled)" value={formatUsdc(earnings.total)} big />
-        <StatCard label="🌿 from remixes" value={formatUsdc(earnings.fromRemixTotal)} />
-        <StatCard label="pending" value={formatUsdc(earnings.pending)} />
+        <StatCard label="earned (settled)" value={formatUsdc(earnings.total, 4)} big />
+        <StatCard label="🌿 from remixes" value={formatUsdc(earnings.fromRemixTotal, 4)} />
+        <StatCard label="pending" value={formatUsdc(earnings.pending, 4)} />
       </div>
 
       <PocketCard
@@ -138,7 +138,7 @@ export default async function EarningsPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="font-extrabold text-[var(--blue-deep)]">
-                      {formatUsdc(it.amount)}
+                      {formatUsdc(it.amount, 4)}
                     </span>
                     <span
                       className={`rounded-full px-2.5 py-0.5 text-[11px] font-extrabold ${

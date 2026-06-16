@@ -28,6 +28,7 @@ import { formatUsdc } from "@/lib/utils/royalty";
 import { STREAM_RATE_USDC_PER_MINUTE } from "@/lib/utils/streaming";
 
 const TOPUP_AMOUNT = 1; // USDC per top-up tap
+const PREVIEW_SECONDS = 30; // free preview for signed-out listeners
 
 interface Props {
   workId: string;
@@ -110,17 +111,29 @@ export function StreamingAudioPlayer({ workId, src, title, free, signedIn }: Pro
     [workId]
   );
 
-  // Cumulative listened seconds → fire a charge each completed minute.
+  // Cumulative listened seconds → enforce the auth gate, then charge per minute.
   const handleSeconds = useCallback(
     (seconds: number) => {
       secondsRef.current = seconds;
-      if (!meter) return;
+      if (free) return; // owner / contributor — unlimited free listening
+
+      if (!signedIn) {
+        // Signed-out: a 30-second preview, then pause behind the sign-in gate.
+        if (seconds >= PREVIEW_SECONDS && !blockedRef.current) {
+          setBlocked(true);
+        }
+        return;
+      }
+
+      // Signed-in: the first completed minute (60s) is free; from then on each
+      // new minute fires a charge. An empty pocket comes back `paused` from the
+      // server and blocks playback with a top-up prompt.
       const minute = Math.floor(seconds / 60);
       if (minute > chargedMinuteRef.current && !inFlightRef.current && !blockedRef.current) {
         heartbeat(false);
       }
     },
-    [meter, heartbeat]
+    [free, signedIn, heartbeat]
   );
 
   // Settle completed minutes when playback pauses.
@@ -187,12 +200,23 @@ export function StreamingAudioPlayer({ workId, src, title, free, signedIn }: Pro
           ✿ you&apos;re a creator on this stem — listening&apos;s on us.
         </p>
       ) : !signedIn ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-gradient-to-br from-[#EAF3FE] to-[#F3EDFE] p-3">
-          <p className="text-xs font-bold text-muted-foreground">
-            🎧 sign in to stream &amp; support the creators —{" "}
-            {formatUsdc(STREAM_RATE_USDC_PER_MINUTE)}/min.
+        <div
+          className={`flex flex-wrap items-center justify-between gap-2 rounded-2xl p-3 ${
+            blocked
+              ? "bg-gradient-to-br from-[#FDEFF6] to-[#F3EDFE] shadow-[var(--shadow-cloud-sm)]"
+              : "bg-gradient-to-br from-[#EAF3FE] to-[#F3EDFE]"
+          }`}
+        >
+          <p
+            className={`text-xs font-bold ${
+              blocked ? "text-accent-foreground" : "text-muted-foreground"
+            }`}
+          >
+            {blocked
+              ? "sign in to support this artist 🎵"
+              : `🎵 ${PREVIEW_SECONDS}-second preview · sign in to keep listening & support the artist`}
           </p>
-          <Button asChild size="sm" variant="outline">
+          <Button asChild size="sm" variant={blocked ? "default" : "outline"}>
             <Link href="/sign-in">
               <LogIn className="h-4 w-4" /> sign in
             </Link>
@@ -201,12 +225,12 @@ export function StreamingAudioPlayer({ workId, src, title, free, signedIn }: Pro
       ) : (
         <div className="rounded-2xl border-[1.5px] border-border bg-card/70 p-3">
           <div className="flex items-center justify-between text-xs font-bold text-muted-foreground">
-            <span>🎧 pay-per-listen · {formatUsdc(STREAM_RATE_USDC_PER_MINUTE)}/min</span>
-            <span>paid this session: {formatUsdc(paidThisSession)}</span>
+            <span>🎧 pay-per-listen · {formatUsdc(STREAM_RATE_USDC_PER_MINUTE, 6)}/min</span>
+            <span>paid this session: {formatUsdc(paidThisSession, 6)}</span>
           </div>
           <div className="mt-2 flex items-center justify-between gap-2">
             <span className="text-sm font-extrabold">
-              pocket: <span className="text-[var(--blue-deep)]">{formatUsdc(pocketBalance)}</span>
+              pocket: <span className="text-[var(--blue-deep)]">{formatUsdc(pocketBalance, 4)}</span>
             </span>
             <Button size="sm" onClick={topUp} disabled={toppingUp} variant={blocked ? "default" : "outline"}>
               {toppingUp ? (

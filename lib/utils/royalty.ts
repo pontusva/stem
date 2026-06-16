@@ -118,14 +118,20 @@ export function splitsAreValid(
   return { valid: Math.abs(total - 100) < 0.01 && splits.length > 0, total };
 }
 
-/** Format a USDC amount for display. */
-export function formatUsdc(amount: number | string): string {
+/**
+ * Format a USDC amount for display. `decimals` fixes the number of fraction
+ * digits shown (USDC stores 6). Use the right precision for the context:
+ *   - 2 → license / escrow / wallet-transaction amounts (the larger numbers)
+ *   - 4 → earnings & pocket balances (e.g. "$0.0010")
+ *   - 6 → the streaming meter, so a $0.001/min charge or $0.000300 split is visible
+ */
+export function formatUsdc(amount: number | string, decimals = 2): string {
   const n = typeof amount === "string" ? parseFloat(amount) : amount;
-  if (!Number.isFinite(n)) return "$0.00";
+  const value = Number.isFinite(n) ? n : 0;
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(n);
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(value);
 }

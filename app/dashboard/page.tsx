@@ -153,12 +153,12 @@ export default async function DashboardPage() {
               <KawaiiWallet size={40} />
               <div>
                 <div className="text-2xl font-extrabold text-[var(--blue-deep)]">
-                  {formatUsdc(earnings.total)}
+                  {formatUsdc(earnings.total, 4)}
                 </div>
                 <div className="text-xs font-bold text-muted-foreground">
                   earned so far
                   {earnings.fromRemixTotal > 0 &&
-                    ` · ${formatUsdc(earnings.fromRemixTotal)} from remixes`}
+                    ` · ${formatUsdc(earnings.fromRemixTotal, 4)} from remixes`}
                 </div>
               </div>
             </div>
