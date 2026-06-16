@@ -68,6 +68,17 @@ Audio lives in a private bucket served via short-lived signed URLs, but any **au
 user can mint one — per-minute billing and the 30s preview are enforced client-side. See
 `TODO.md`.
 
+### 4c. Uploads are direct-to-Storage; no server-side file validation
+File bytes upload straight from the browser to Supabase Storage via a one-time signed upload
+URL (so they bypass the serverless ~4.5 MB request-body limit). Consequently the bytes never
+reach the server: the old `music-metadata` parse — which both confirmed "real audio" and
+extracted duration — was **removed** (the dependency is dropped). Validation is now the
+bucket's `allowed_mime_types` (Supabase rejects non-audio MIME on `stems`) plus the browser
+decoding the file to read duration; **`duration_seconds` is client-reported** (consistent
+with the client-trust already noted for streaming seconds). A determined client could spoof
+the content type or duration. Re-adding server validation would mean re-downloading the
+object server-side (heavy for large files) — deferred.
+
 ### 5. Testnet only
 Runs on **Arc Testnet** (chainId 5042002), where USDC is the native gas token. No mainnet
 path is wired, and faucet funding is manual (Circle's faucet drip API is unsupported for

@@ -24,6 +24,7 @@ import { toast } from "sonner";
 import { Loader2, Upload } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { uploadWorkFile } from "@/lib/utils/client-upload";
 
 /**
  * Lets a work owner attach (or replace) the work file after registration —
@@ -38,14 +39,7 @@ export function WorkFileUpload({ workId }: { workId: string }) {
     if (!file) return toast.error("Choose a file first");
     setUploading(true);
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch(`/api/works/${workId}/file`, {
-        method: "POST",
-        body: fd,
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Upload failed");
+      await uploadWorkFile(workId, file);
       toast.success("File uploaded — you can now license this work");
       router.refresh();
     } catch (err: any) {

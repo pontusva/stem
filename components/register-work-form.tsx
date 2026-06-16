@@ -38,6 +38,7 @@ import {
   AiRosterItem,
 } from "@/components/contributor-split-editor";
 import { StemCloud } from "@/components/kawaii/stem-cloud";
+import { uploadWorkFile } from "@/lib/utils/client-upload";
 import { scaleUpstreamSplits, UPSTREAM_SHARE_PCT } from "@/lib/utils/royalty";
 import { WorkType } from "@/types/royalty";
 
@@ -188,19 +189,11 @@ export function RegisterWorkForm({
       if (!workRes.ok) throw new Error(workJson.error || "Failed to create work");
       const workId = workJson.work.id as string;
 
-      // 2. Upload the file.
+      // 2. Upload the file — straight to Storage from the browser (bypasses the
+      //    serverless body limit), then finalize.
       if (file) {
         setStep("Uploading file…");
-        const fd = new FormData();
-        fd.append("file", file);
-        const fileRes = await fetch(`/api/works/${workId}/file`, {
-          method: "POST",
-          body: fd,
-        });
-        if (!fileRes.ok) {
-          const fileJson = await fileRes.json();
-          throw new Error(fileJson.error || "File upload failed");
-        }
+        await uploadWorkFile(workId, file);
       }
 
       // 3. Resolve AI contributors — reuse an existing agent, or mint a new one.

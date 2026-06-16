@@ -33,7 +33,6 @@
     "geist": "^1.2.1",
     "lucide-react": "^0.436.0",
     "mammoth": "^1.8.0",
-    "music-metadata": "^11.13.0",
     "next": "latest",
     "next-themes": "^0.3.0",
     "pdf-parse": "^1.1.1",

@@ -19,20 +19,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server-client";
 import { createSupabaseServiceClient } from "@/lib/supabase/service-client";
-import { createWorksService } from "@/app/services/works.service";
 import { getCurrentUser } from "@/lib/utils/current-user";
-import { bucketForFile, isAudioFile } from "@/lib/utils/work-files";
+import { bucketForFile, safeStoragePath } from "@/lib/utils/work-files";
 
 export const dynamic = "force-dynamic";
 
 /**
- * POST /api/works/[id]/file — finalize an upload.
- *
- * The bytes are uploaded straight from the browser to Storage via a signed
- * upload URL (see ./sign), so this route only takes JSON: the stored `path`
- * and the client-measured `durationSeconds` (for audio). It records the file
- * URL + duration on the work. No file bytes pass through this function, so it's
- * not subject to the serverless request-body limit.
+ * POST /api/works/[id]/file/sign  { fileName, contentType }
+ * Returns a one-time signed upload URL so the browser can upload the file
+ * bytes DIRECTLY to Supabase Storage — bypassing the serverless request-body
+ * limit (audio masters can be tens of MB). The client then calls
+ * POST /api/works/[id]/file with the resulting path to finalize.
  */
 export async function POST(
   req: NextRequest,
@@ -45,8 +42,6 @@ export async function POST(
   }
 
   const service = createSupabaseServiceClient();
-  const worksService = createWorksService(service);
-
   const { data: work } = await service
     .from("works")
     .select("id, owner_profile_id")
@@ -57,45 +52,37 @@ export async function POST(
   }
   if (work.owner_profile_id !== user.profileId) {
     return NextResponse.json(
-      { error: "Only the work owner can attach its file" },
+      { error: "Only the work owner can upload its file" },
       { status: 403 }
     );
   }
 
-  let path = "";
-  let durationSeconds: unknown = undefined;
+  let fileName = "";
+  let contentType = "";
   try {
     const body = await req.json();
-    path = String(body.path ?? "");
-    durationSeconds = body.durationSeconds;
+    fileName = String(body.fileName ?? "");
+    contentType = String(body.contentType ?? "");
   } catch {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
-
-  // The path must live under this work's folder (it was minted by ./sign).
-  if (!path || !path.startsWith(`${params.id}/`)) {
-    return NextResponse.json({ error: "Invalid file path" }, { status: 400 });
+  if (!fileName) {
+    return NextResponse.json({ error: "fileName is required" }, { status: 400 });
   }
 
-  const audio = isAudioFile(path);
-  const bucket = bucketForFile(path);
+  const bucket = bucketForFile(fileName, contentType);
+  const path = safeStoragePath(params.id, fileName);
 
-  const { data: pub } = service.storage.from(bucket).getPublicUrl(path);
+  const { data, error } = await service.storage
+    .from(bucket)
+    .createSignedUploadUrl(path);
 
-  // Store duration only for audio; round to ms. Omit (undefined) for non-audio
-  // so a re-upload can't clobber an existing value.
-  let duration: number | null | undefined = undefined;
-  if (audio) {
-    duration =
-      typeof durationSeconds === "number" && Number.isFinite(durationSeconds)
-        ? Math.round(durationSeconds * 1000) / 1000
-        : null;
+  if (error || !data) {
+    return NextResponse.json(
+      { error: `Could not start upload: ${error?.message ?? "unknown"}` },
+      { status: 500 }
+    );
   }
 
-  await worksService.updateWorkFile(params.id, path, pub.publicUrl, duration);
-
-  return NextResponse.json(
-    { filePath: path, fileUrl: pub.publicUrl, durationSeconds: duration ?? null },
-    { status: 201 }
-  );
+  return NextResponse.json({ bucket, path, token: data.token });
 }
