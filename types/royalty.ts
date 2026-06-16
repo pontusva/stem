@@ -31,9 +31,14 @@ export type LicenseStatus =
   | "SPLITTING"
   | "CLOSED"
   | "REFUNDED"
+  | "REJECTED"
   | "FAILED";
 
 export type RoyaltyPaymentStatus = "PENDING" | "COMPLETE" | "FAILED";
+
+export type ValidationVerdict = "PASS" | "FAIL";
+export type ValidationStatus = "PENDING" | "COMPLETE" | "FAILED";
+export type EvidenceKind = "text" | "image" | "metadata";
 
 export interface Work {
   id: string;
@@ -128,6 +133,38 @@ export interface AiAgent {
 export interface AiAgentWithStats extends AiAgent {
   works_count: number;
   total_earned: number;
+  /** number of COMPLETE paid validations this agent has performed */
+  validations_count: number;
+  /** total USDC earned in validation service fees (distinct from royalties) */
+  fees_earned: number;
+}
+
+/** A paid AI work-validation event (one per license validation attempt). */
+export interface Validation {
+  id: string;
+  license_id: string;
+  work_id: string;
+  validator_wallet_id: string;
+  model: string;
+  verdict: ValidationVerdict;
+  confidence: number | null;
+  reasoning: string | null;
+  evidence_kind: EvidenceKind | null;
+  fee_usdc: number;
+  circle_transfer_id: string | null;
+  status: ValidationStatus;
+  onchain_tx_hash: string | null;
+  created_at: string;
+}
+
+/** The validation outcome returned alongside a license purchase. */
+export interface ValidationResult {
+  verdict: ValidationVerdict;
+  confidence: number;
+  reasoning: string;
+  evidenceKind: EvidenceKind;
+  /** true when Claude was unreachable and we failed open (no fee charged) */
+  failedOpen: boolean;
 }
 
 /** Shape of a contributor row submitted from the registration form. */

@@ -30,5 +30,9 @@ namespace NodeJS {
     GOOGLE_CLIENT_ID: string
     GOOGLE_CLIENT_SECRET: string
     ANTHROPIC_API_KEY: string
+    // Paid AI validation gate (all optional; sensible defaults in code)
+    VALIDATION_FEE_PCT?: string
+    VALIDATION_FEE_MIN_USDC?: string
+    VALIDATION_FAIL_OPEN?: string
   }
 }

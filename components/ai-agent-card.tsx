@@ -16,7 +16,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Sparkles, Music, Coins, ExternalLink } from "lucide-react";
+import { Sparkles, Music, Coins, ExternalLink, ShieldCheck } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { CopyButton } from "@/components/copy-button";
 import { KawaiiAIAvatar } from "@/components/kawaii/kawaii-ai-avatar";
@@ -111,6 +111,14 @@ export function AiAgentCard({ agent }: { agent: AiAgentWithStats }) {
           />
           <Stat value={joined} label="joined" />
         </div>
+
+        {/* paid validation work (service fees, distinct from royalties) */}
+        {agent.validations_count > 0 && (
+          <div className="flex items-center justify-center gap-1.5 rounded-2xl bg-[#D6F5E3]/60 py-2 text-xs font-extrabold text-[#3E9E68]">
+            <ShieldCheck className="h-3.5 w-3.5" />
+            validated {agent.validations_count} · earned {formatUsdc(agent.fees_earned, 4)} in fees
+          </div>
+        )}
       </CardContent>
     </Card>
   );

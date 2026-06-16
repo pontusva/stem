@@ -29,6 +29,106 @@ import { AiAgent, AiAgentWithStats } from "@/types/royalty";
 const AGENT_SELECT =
   "id, display_name, origin, capabilities, wallet_address, circle_wallet_id, erc8004_agent_id, erc8004_tx_hash, created_at";
 
+export interface ProvisionedAgentWallet {
+  /** The raw Circle wallet object (id, address, accountType, custodyType, blockchain). */
+  created: any;
+  walletSetId: string;
+  /** ERC-8004 token id, or null if identity registration was skipped/failed. */
+  agentId: string | null;
+  identityTxHash: string | null;
+  identityError: string | null;
+}
+
+/**
+ * Mint a Circle SCA wallet for an AI agent and best-effort register an ERC-8004
+ * on-chain identity for it. Shared by both human-owned agents (createOrGetAgent)
+ * and the platform STEM Validator agent. The caller persists the wallet row,
+ * since ownership (profile_id / created_by_profile_id) differs per use.
+ */
+export async function provisionAgentWallet(
+  supabase: SupabaseClient,
+  params: { name: string; origin?: string | null; capabilities?: string | null }
+): Promise<ProvisionedAgentWallet> {
+  const name = params.name.trim();
+
+  if (!process.env.CIRCLE_BLOCKCHAIN) {
+    throw new Error("CIRCLE_BLOCKCHAIN is not configured");
+  }
+
+  // Mint a Circle SCA wallet for the agent.
+  const walletSet = await circleDeveloperSdk.createWalletSet({
+    name: `AI: ${name}`,
+  });
+  const walletSetId = walletSet.data?.walletSet?.id;
+  if (!walletSetId) throw new Error("Failed to create wallet set");
+
+  const wallets = await circleDeveloperSdk.createWallets({
+    accountType: "SCA",
+    blockchains: [process.env.CIRCLE_BLOCKCHAIN as Blockchain],
+    count: 1,
+    walletSetId,
+  });
+  const created: any = wallets.data?.wallets?.[0];
+  if (!created) throw new Error("Failed to create AI wallet");
+
+  // Best-effort ERC-8004 identity registration on Arc.
+  let agentId: string | null = null;
+  let identityTxHash: string | null = null;
+  let identityError: string | null = null;
+
+  const agentWalletId = process.env.NEXT_PUBLIC_AGENT_WALLET_ID;
+  const agentWalletAddress = process.env.NEXT_PUBLIC_AGENT_WALLET_ADDRESS;
+
+  if (agentWalletId && agentWalletAddress) {
+    try {
+      const metadata = {
+        name,
+        type: "ai",
+        origin: params.origin ?? null,
+        capabilities: params.capabilities
+          ? params.capabilities.split(",").map((c) => c.trim()).filter(Boolean)
+          : [],
+        wallet_address: created.address,
+        registered_by: agentWalletAddress,
+      };
+      const metaPath = `ai-identities/${created.id}.json`;
+      await supabase.storage
+        .from("works-files")
+        .upload(metaPath, JSON.stringify(metadata, null, 2), {
+          contentType: "application/json",
+          upsert: true,
+        });
+      const { data: pub } = supabase.storage
+        .from("works-files")
+        .getPublicUrl(metaPath);
+
+      const register = await circleDeveloperSdk.createContractExecutionTransaction({
+        walletId: agentWalletId,
+        contractAddress: ARC.IDENTITY_REGISTRY,
+        abiFunctionSignature: "register(string)",
+        abiParameters: [pub.publicUrl],
+        fee: { type: "level", config: { feeLevel: "MEDIUM" } },
+      });
+
+      const txId = register.data?.id;
+      if (txId) {
+        const { txHash } = await waitForCircleTx(txId, "ERC-8004 register");
+        identityTxHash = txHash ?? null;
+        if (txHash) {
+          agentId = await getAgentIdFromTxHash(txHash, agentWalletAddress);
+        }
+      }
+    } catch (err: any) {
+      identityError = err?.message ?? "ERC-8004 registration failed";
+      console.error("ERC-8004 registration failed:", identityError);
+    }
+  } else {
+    identityError = "Agent wallet not configured; skipped ERC-8004 registration";
+  }
+
+  return { created, walletSetId, agentId, identityTxHash, identityError };
+}
+
 /** Operates with the service-role client (privileged writes + storage). */
 export const createAiAgentService = (supabase: SupabaseClient) => ({
   /**
@@ -58,81 +158,13 @@ export const createAiAgentService = (supabase: SupabaseClient) => ({
       return { agent: existing as AiAgent, reused: true, identityError: null };
     }
 
-    if (!process.env.CIRCLE_BLOCKCHAIN) {
-      throw new Error("CIRCLE_BLOCKCHAIN is not configured");
-    }
-
-    // 2. Mint a Circle SCA wallet for the agent.
-    const walletSet = await circleDeveloperSdk.createWalletSet({
-      name: `AI: ${name}`,
-    });
-    const walletSetId = walletSet.data?.walletSet?.id;
-    if (!walletSetId) throw new Error("Failed to create wallet set");
-
-    const wallets = await circleDeveloperSdk.createWallets({
-      accountType: "SCA",
-      blockchains: [process.env.CIRCLE_BLOCKCHAIN as Blockchain],
-      count: 1,
-      walletSetId,
-    });
-    const created: any = wallets.data?.wallets?.[0];
-    if (!created) throw new Error("Failed to create AI wallet");
-
-    // 3. Best-effort ERC-8004 identity registration on Arc.
-    let agentId: string | null = null;
-    let identityTxHash: string | null = null;
-    let identityError: string | null = null;
-
-    const agentWalletId = process.env.NEXT_PUBLIC_AGENT_WALLET_ID;
-    const agentWalletAddress = process.env.NEXT_PUBLIC_AGENT_WALLET_ADDRESS;
-
-    if (agentWalletId && agentWalletAddress) {
-      try {
-        const metadata = {
-          name,
-          type: "ai",
-          origin: params.origin ?? null,
-          capabilities: params.capabilities
-            ? params.capabilities.split(",").map((c) => c.trim()).filter(Boolean)
-            : [],
-          wallet_address: created.address,
-          registered_by: agentWalletAddress,
-        };
-        const metaPath = `ai-identities/${created.id}.json`;
-        await supabase.storage
-          .from("works-files")
-          .upload(metaPath, JSON.stringify(metadata, null, 2), {
-            contentType: "application/json",
-            upsert: true,
-          });
-        const { data: pub } = supabase.storage
-          .from("works-files")
-          .getPublicUrl(metaPath);
-
-        const register =
-          await circleDeveloperSdk.createContractExecutionTransaction({
-            walletId: agentWalletId,
-            contractAddress: ARC.IDENTITY_REGISTRY,
-            abiFunctionSignature: "register(string)",
-            abiParameters: [pub.publicUrl],
-            fee: { type: "level", config: { feeLevel: "MEDIUM" } },
-          });
-
-        const txId = register.data?.id;
-        if (txId) {
-          const { txHash } = await waitForCircleTx(txId, "ERC-8004 register");
-          identityTxHash = txHash ?? null;
-          if (txHash) {
-            agentId = await getAgentIdFromTxHash(txHash, agentWalletAddress);
-          }
-        }
-      } catch (err: any) {
-        identityError = err?.message ?? "ERC-8004 registration failed";
-        console.error("ERC-8004 registration failed:", identityError);
-      }
-    } else {
-      identityError = "Agent wallet not configured; skipped ERC-8004 registration";
-    }
+    // 2-3. Mint a Circle SCA wallet + best-effort ERC-8004 identity.
+    const { created, walletSetId, agentId, identityTxHash, identityError } =
+      await provisionAgentWallet(supabase, {
+        name,
+        origin: params.origin,
+        capabilities: params.capabilities,
+      });
 
     // 4. Persist the agent (a wallet row, profile_id NULL, is_ai true).
     const { data: walletRow, error } = await supabase
@@ -189,6 +221,13 @@ export const createAiAgentService = (supabase: SupabaseClient) => ({
       .in("wallet_id", ids)
       .eq("status", "COMPLETE");
 
+    // Paid validation work performed by these agents (distinct from royalties).
+    const { data: validations } = await supabase
+      .from("validations")
+      .select("validator_wallet_id, fee_usdc, status")
+      .in("validator_wallet_id", ids)
+      .eq("status", "COMPLETE");
+
     const worksByWallet = new Map<string, Set<string>>();
     (contribs ?? []).forEach((c: any) => {
       if (!worksByWallet.has(c.wallet_id)) worksByWallet.set(c.wallet_id, new Set());
@@ -203,10 +242,20 @@ export const createAiAgentService = (supabase: SupabaseClient) => ({
       );
     });
 
+    const validationsByWallet = new Map<string, { count: number; fees: number }>();
+    (validations ?? []).forEach((v: any) => {
+      const cur = validationsByWallet.get(v.validator_wallet_id) ?? { count: 0, fees: 0 };
+      cur.count += 1;
+      cur.fees += Number(v.fee_usdc);
+      validationsByWallet.set(v.validator_wallet_id, cur);
+    });
+
     return agents.map((a: any) => ({
       ...(a as AiAgent),
       works_count: worksByWallet.get(a.id)?.size ?? 0,
       total_earned: earnedByWallet.get(a.id) ?? 0,
+      validations_count: validationsByWallet.get(a.id)?.count ?? 0,
+      fees_earned: validationsByWallet.get(a.id)?.fees ?? 0,
     }));
   },
 

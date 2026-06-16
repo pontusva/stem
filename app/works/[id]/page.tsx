@@ -60,6 +60,19 @@ export default async function WorkDetailPage({
   const provenance = await worksService.getProvenanceChain(params.id);
   const downstream = await worksService.getDownstreamStats(params.id);
 
+  // Latest paid AI validation for this work (onchain_tx_hash present == a real
+  // fee was paid to the validator, so we only badge genuinely-reviewed works).
+  const { data: validation } = await service
+    .from("validations")
+    .select("confidence, onchain_tx_hash, created_at")
+    .eq("work_id", params.id)
+    .eq("verdict", "PASS")
+    .eq("status", "COMPLETE")
+    .not("onchain_tx_hash", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
   let isOwner = false;
   let viewerWalletId: string | null = null;
   let alreadyLicensed = false;
@@ -144,6 +157,23 @@ export default async function WorkDetailPage({
             <Badge variant="outline" className="capitalize">
               {work.work_type}
             </Badge>
+            {validation && (
+              <a
+                href={`${EXPLORER}/tx/${validation.onchain_tx_hash}`}
+                target="_blank"
+                rel="noreferrer"
+                title={
+                  validation.confidence != null
+                    ? `Reviewed by the STEM Validator (${Math.round(
+                        Number(validation.confidence) * 100
+                      )}% confidence)`
+                    : "Reviewed by the STEM Validator"
+                }
+                className="inline-flex items-center gap-1 rounded-full bg-[#D6F5E3]/70 px-2.5 py-0.5 text-xs font-extrabold text-[#3E9E68] hover:brightness-95"
+              >
+                ✨ Validated by STEM Validator
+              </a>
+            )}
             {work.parent_work_id && (
               <Link
                 href={`/works/${work.parent_work_id}`}

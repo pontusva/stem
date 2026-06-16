@@ -19,8 +19,44 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { circleDeveloperSdk } from "@/lib/utils/developer-controlled-wallets-client";
 import { ARC, waitForCircleTx } from "@/lib/utils/arc";
-import { computeSplitAmounts } from "@/lib/utils/royalty";
-import { License, LicenseStatus, LicenseWithDetails } from "@/types/royalty";
+import { computeSplitAmounts, computeValidationFee } from "@/lib/utils/royalty";
+import { createValidationService } from "@/app/services/validation.service";
+import { createValidatorAgentService } from "@/app/services/validator-agent.service";
+import {
+  License,
+  LicenseStatus,
+  LicenseWithDetails,
+  ValidationResult,
+  Work,
+} from "@/types/royalty";
+
+/** The work fields the validation gate needs to review a delivered work. */
+type PurchaseWork = Pick<
+  Work,
+  "id" | "title" | "description" | "work_type" | "file_path" | "file_url" | "duration_seconds"
+>;
+
+/** Thrown when the AI validator rejects a work; the route maps this to 422. */
+export class ValidationRejectedError extends Error {
+  confidence: number;
+  reasoning: string;
+  constructor(reasoning: string, confidence: number) {
+    super(`Work rejected by the STEM Validator: ${reasoning}`);
+    this.name = "ValidationRejectedError";
+    this.reasoning = reasoning;
+    this.confidence = confidence;
+  }
+}
+
+/** Validation fee config (percent of license amount, with a USDC floor). */
+function validationFeeConfig(): { pct: number; min: number } {
+  const pct = Number(process.env.VALIDATION_FEE_PCT ?? "5");
+  const min = Number(process.env.VALIDATION_FEE_MIN_USDC ?? "0.05");
+  return {
+    pct: Number.isFinite(pct) ? pct : 5,
+    min: Number.isFinite(min) ? min : 0.05,
+  };
+}
 
 const LICENSE_DETAIL_SELECT = `
   *,
@@ -145,15 +181,22 @@ export const createLicenseService = (supabase: SupabaseClient) => ({
   },
 
   /**
-   * Instant derivative-license purchase — no escrow. The buyer's own Circle
-   * wallet pays each contributor their split directly (one wallet-to-wallet USDC
-   * transfer per contributor, proportional to split_pct), then the license is
-   * granted (CLOSED). A COMPLETE royalty_payment is recorded per contributor so
-   * earnings reflect it immediately. If any leg fails the license is marked
-   * FAILED and the error is rethrown (note: earlier legs may already be paid).
+   * Instant derivative-license purchase, gated by a PAID AI validation.
+   *
+   * Flow: create the license → the STEM Validator agent reviews the delivered
+   * work with Claude. A FAIL aborts before any money moves (license REJECTED,
+   * throws ValidationRejectedError). On PASS, a validation fee is carved from
+   * the amount and paid to the validator FIRST (smallest blast radius), then the
+   * remainder is split to contributors — one wallet-to-wallet USDC transfer each,
+   * fee + Σsplits == amount exactly — and the license is granted (CLOSED).
+   *
+   * Like before, the legs are independent transfers (no atomic wrapper): if a
+   * later leg fails the license is marked FAILED and the error rethrown, and
+   * earlier legs may already be settled. If Claude is unavailable the gate fails
+   * open (sale proceeds, no fee charged) unless VALIDATION_FAIL_OPEN="false".
    */
   async purchaseInstant(params: {
-    workId: string;
+    work: PurchaseWork;
     buyerProfileId: string;
     buyerWalletId: string;
     buyerCircleWalletId: string;
@@ -161,13 +204,26 @@ export const createLicenseService = (supabase: SupabaseClient) => ({
   }): Promise<{
     license: License;
     payments: { contributorId: string; amount: number; transferId?: string }[];
+    validation: {
+      verdict: ValidationResult["verdict"];
+      confidence: number;
+      reasoning: string;
+      failedOpen: boolean;
+      feeUsdc: number;
+      transferId?: string;
+      feeTxHash?: string;
+      validatorName: string;
+      validatorAddress: string;
+    };
   }> {
+    const workId = params.work.id;
+
     const { data: contributors, error: contribError } = await supabase
       .from("contributors")
       .select(
         `*, wallet:wallets!contributors_wallet_id_fkey ( id, wallet_address )`
       )
-      .eq("work_id", params.workId)
+      .eq("work_id", workId)
       .order("split_pct", { ascending: false });
 
     if (contribError) {
@@ -177,22 +233,94 @@ export const createLicenseService = (supabase: SupabaseClient) => ({
       throw new Error("Work has no contributors to pay");
     }
 
-    const amounts = computeSplitAmounts(params.amountUsdc, contributors as any[]);
+    // Resolve the platform validator agent (minted on first ever use).
+    const validator = await createValidatorAgentService(
+      supabase
+    ).getOrCreateValidatorAgent();
 
     const license = await this.createLicense({
-      workId: params.workId,
+      workId,
       buyerProfileId: params.buyerProfileId,
       buyerWalletId: params.buyerWalletId,
       amountUsdc: params.amountUsdc,
     });
+
+    // ----- Validation gate (before any money moves) -----
+    const verdict = await createValidationService(supabase).validateWork(
+      params.work
+    );
+
+    if (verdict.verdict === "FAIL") {
+      await supabase.from("validations").insert({
+        license_id: license.id,
+        work_id: workId,
+        validator_wallet_id: validator.id,
+        model: verdict.model,
+        verdict: "FAIL",
+        confidence: verdict.confidence,
+        reasoning: verdict.reasoning,
+        evidence_kind: verdict.evidenceKind,
+        fee_usdc: 0,
+        status: "COMPLETE",
+      });
+      await this.updateStatus(license.id, "REJECTED");
+      throw new ValidationRejectedError(verdict.reasoning, verdict.confidence);
+    }
+
+    // ----- PASS: carve the validation fee, split the remainder -----
+    const { pct, min } = validationFeeConfig();
+    // A fail-open PASS means validation didn't really run → charge no fee.
+    const { feeUsdc, remainderUsdc } = verdict.failedOpen
+      ? { feeUsdc: 0, remainderUsdc: params.amountUsdc }
+      : computeValidationFee(params.amountUsdc, pct, min, contributors.length);
+
+    const amounts = computeSplitAmounts(remainderUsdc, contributors as any[]);
+
+    await this.updateStatus(license.id, "SPLITTING");
 
     const results: {
       contributorId: string;
       amount: number;
       transferId?: string;
     }[] = [];
+    let feeTransferId: string | undefined;
+    let feeTxHash: string | undefined;
 
     try {
+      // 1. Pay the validator its fee first (only if a real fee is due).
+      if (feeUsdc > 0 && validator.wallet_address) {
+        const feeTransfer = await circleDeveloperSdk.createTransaction({
+          walletId: params.buyerCircleWalletId,
+          destinationAddress: validator.wallet_address,
+          amount: [feeUsdc.toFixed(6)],
+          tokenAddress: ARC.USDC,
+          blockchain: ARC.BLOCKCHAIN as any,
+          fee: { type: "level", config: { feeLevel: "MEDIUM" } },
+        });
+        feeTransferId = feeTransfer.data?.id;
+        if (feeTransferId) {
+          const { txHash } = await waitForCircleTx(feeTransferId, "validation fee");
+          feeTxHash = txHash;
+        }
+      }
+
+      // Record the (paid) validation now that the fee has settled.
+      await supabase.from("validations").insert({
+        license_id: license.id,
+        work_id: workId,
+        validator_wallet_id: validator.id,
+        model: verdict.model,
+        verdict: "PASS",
+        confidence: verdict.confidence,
+        reasoning: verdict.reasoning,
+        evidence_kind: verdict.evidenceKind,
+        fee_usdc: feeUsdc,
+        circle_transfer_id: feeTransferId ?? null,
+        onchain_tx_hash: feeTxHash ?? null,
+        status: "COMPLETE",
+      });
+
+      // 2. Split the remainder to contributors.
       for (let i = 0; i < contributors.length; i++) {
         const contributor = contributors[i] as any;
         const amount = amounts[i];
@@ -235,6 +363,20 @@ export const createLicenseService = (supabase: SupabaseClient) => ({
     }
 
     await this.updateStatus(license.id, "CLOSED");
-    return { license: { ...license, status: "CLOSED" }, payments: results };
+    return {
+      license: { ...license, status: "CLOSED" },
+      payments: results,
+      validation: {
+        verdict: "PASS",
+        confidence: verdict.confidence,
+        reasoning: verdict.reasoning,
+        failedOpen: verdict.failedOpen,
+        feeUsdc,
+        transferId: feeTransferId,
+        feeTxHash,
+        validatorName: validator.display_name,
+        validatorAddress: validator.wallet_address,
+      },
+    };
   },
 });

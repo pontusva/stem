@@ -62,6 +62,46 @@ export function computeSplitAmounts<T extends { split_pct: number | string }>(
 }
 
 /**
+ * Compute the AI validation fee carved from a license amount, in human USDC.
+ *
+ * The fee is `pct`% of the amount with a `minUsdc` floor, computed in integer
+ * micro-USDC so it composes exactly with `computeSplitAmounts` (feed the
+ * remainder `amountUsdc - fee` back into the splitter and `fee + Σsplits`
+ * reconciles to the original amount to the micro-USDC).
+ *
+ * It is clamped so the fee can never starve the contributors: at least
+ * `contributorCount` base units (1 µUSDC each) are always left to split. For a
+ * license too small to satisfy the floor and still pay everyone, the fee is
+ * reduced — never the splits. Returns 0 if there's nothing meaningful to carve.
+ *
+ * @returns { feeUsdc, remainderUsdc } both exact at 6dp; they sum to amountUsdc.
+ */
+export function computeValidationFee(
+  amountUsdc: number,
+  pct: number,
+  minUsdc: number,
+  contributorCount = 1
+): { feeUsdc: number; remainderUsdc: number } {
+  const amountUnits = BigInt(Math.round(amountUsdc * 1_000_000));
+  if (amountUnits <= 0n) return { feeUsdc: 0, remainderUsdc: 0 };
+
+  const pctUnits = (amountUnits * BigInt(Math.round(pct * 100))) / 10_000n;
+  const minUnits = BigInt(Math.round(minUsdc * 1_000_000));
+  let feeUnits = pctUnits > minUnits ? pctUnits : minUnits;
+
+  // Always leave at least 1 µUSDC per contributor for the split.
+  const reserve = BigInt(Math.max(contributorCount, 1));
+  const maxFee = amountUnits > reserve ? amountUnits - reserve : 0n;
+  if (feeUnits > maxFee) feeUnits = maxFee;
+  if (feeUnits < 0n) feeUnits = 0n;
+
+  return {
+    feeUsdc: Number(feeUnits) / 1_000_000,
+    remainderUsdc: Number(amountUnits - feeUnits) / 1_000_000,
+  };
+}
+
+/**
  * stem's provenance rule: when a work is a remix/derivative, this fixed share of
  * every license flows back up to the parent work's creators (recursively).
  */

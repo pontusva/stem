@@ -19,7 +19,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server-client";
 import { createSupabaseServiceClient } from "@/lib/supabase/service-client";
-import { createLicenseService } from "@/app/services/license.service";
+import {
+  createLicenseService,
+  ValidationRejectedError,
+} from "@/app/services/license.service";
 import { circleDeveloperSdk } from "@/lib/utils/developer-controlled-wallets-client";
 import { getCurrentUser } from "@/lib/utils/current-user";
 
@@ -97,7 +100,9 @@ export async function POST(req: NextRequest) {
 
     const { data: work } = await service
       .from("works")
-      .select("id, title, license_price, owner_profile_id")
+      .select(
+        "id, title, description, work_type, file_path, file_url, duration_seconds, license_price, owner_profile_id"
+      )
       .eq("id", workId)
       .single();
     if (!work) {
@@ -119,7 +124,7 @@ export async function POST(req: NextRequest) {
       .select("id")
       .eq("work_id", workId)
       .eq("buyer_profile_id", user.profileId)
-      .not("status", "in", "(FAILED,REFUNDED)")
+      .not("status", "in", "(FAILED,REFUNDED,REJECTED)")
       .limit(1);
     if (existingLicense && existingLicense.length > 0) {
       return NextResponse.json(
@@ -151,16 +156,28 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { license, payments } = await licenseService.purchaseInstant({
-      workId,
+    const { license, payments, validation } = await licenseService.purchaseInstant({
+      work: work as any,
       buyerProfileId: user.profileId,
       buyerWalletId: user.wallet.id,
       buyerCircleWalletId: user.wallet.circle_wallet_id,
       amountUsdc: amount,
     });
 
-    return NextResponse.json({ license, payments }, { status: 201 });
+    return NextResponse.json({ license, payments, validation }, { status: 201 });
   } catch (error: any) {
+    // The AI validator rejected the work — no money moved. 422, with the reason.
+    if (error instanceof ValidationRejectedError) {
+      return NextResponse.json(
+        {
+          error: "rejected",
+          verdict: "FAIL",
+          reasoning: error.reasoning,
+          confidence: error.confidence,
+        },
+        { status: 422 }
+      );
+    }
     console.error("License purchase failed:", error);
     return NextResponse.json(
       { error: `Failed to buy license: ${error.message}` },
