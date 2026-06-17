@@ -75,26 +75,12 @@ export async function POST(
     }
 
     // Owners, contributors, and valid license holders listen for free.
-    let free = work.owner_profile_id === user.profileId;
-    if (!free) {
-      const { data: contrib } = await service
-        .from("contributors")
-        .select("id")
-        .eq("work_id", params.id)
-        .or(`profile_id.eq.${user.profileId},wallet_id.eq.${user.wallet.id}`)
-        .limit(1);
-      free = (contrib?.length ?? 0) > 0;
-    }
-    if (!free) {
-      const { data: license } = await service
-        .from("licenses")
-        .select("id")
-        .eq("work_id", params.id)
-        .eq("buyer_profile_id", user.profileId)
-        .not("status", "in", "(FAILED,REFUNDED)")
-        .limit(1);
-      free = (license?.length ?? 0) > 0;
-    }
+    const { free } = await streaming.getEntitlement(
+      params.id,
+      work.owner_profile_id,
+      user.profileId,
+      user.wallet.id
+    );
 
     await streaming.getOrCreatePocket(user.wallet.id, user.profileId);
     const session = await streaming.startSession(

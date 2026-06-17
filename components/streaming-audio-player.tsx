@@ -42,13 +42,14 @@ interface Props {
 /**
  * Pay-per-listen wrapper around AudioPlayer (Mode 1, internal pocket).
  *
- * Audio bytes live in a private bucket: this component pulls a short-lived
- * signed URL from /api/works/[id]/audio-url (authenticated callers only) and
- * refreshes it as it nears expiry / on media errors. Signed-out users never get
- * a URL — they see a locked sign-in card and no audio element at all.
+ * Audio bytes live in a private bucket and are streamed through the same-origin
+ * proxy /api/works/[id]/audio (cookie-authenticated) — no Supabase signed URL is
+ * ever exposed to the browser. Signed-out users never get an audio element at
+ * all; they see a locked sign-in card.
  *
  * For signed-in listeners it meters real listening and charges $0.001/min via
- * /api/works/[id]/stream, pausing with a top-up prompt when the pocket runs dry.
+ * /api/works/[id]/stream, pausing with a top-up prompt when the pocket runs dry
+ * (the proxy also refuses bytes once the pocket is empty, returning 402).
  */
 export function StreamingAudioPlayer({
   workId,
@@ -57,7 +58,6 @@ export function StreamingAudioPlayer({
   freeReason = "creator",
   signedIn,
 }: Props) {
-  const [audioSrc, setAudioSrc] = useState<string | null>(null);
   const [pocketBalance, setPocketBalance] = useState(0);
   const [paidThisSession, setPaidThisSession] = useState(0);
   const [blocked, setBlocked] = useState(false);
@@ -67,43 +67,17 @@ export function StreamingAudioPlayer({
   const chargedMinuteRef = useRef(0);
   const inFlightRef = useRef(false);
   const blockedRef = useRef(false);
-
-  // Signed-URL lifecycle.
-  const urlMintedAtRef = useRef(0);
-  const urlTtlRef = useRef(60);
-  const urlInFlightRef = useRef(false);
-  const lastErrorRefreshRef = useRef(0);
+  const lastErrorRef = useRef(0);
 
   const meter = !free && !!signedIn; // owner/contributor & signed-out never metered
+
+  // Same-origin proxy: a stable, cookie-authenticated URL — no minting/rotation,
+  // and nothing copyable that works without this user's session.
+  const audioSrc = `/api/works/${workId}/audio`;
 
   useEffect(() => {
     blockedRef.current = blocked;
   }, [blocked]);
-
-  // Mint a fresh signed URL (authenticated users only).
-  const fetchSignedUrl = useCallback(async () => {
-    if (urlInFlightRef.current) return;
-    urlInFlightRef.current = true;
-    try {
-      const res = await fetch(`/api/works/${workId}/audio-url`);
-      if (!res.ok) return;
-      const json = await res.json();
-      if (json.url) {
-        urlMintedAtRef.current = Date.now();
-        urlTtlRef.current = Number(json.expiresIn) || 60;
-        setAudioSrc(json.url);
-      }
-    } catch {
-      // transient — a later play/error will retry
-    } finally {
-      urlInFlightRef.current = false;
-    }
-  }, [workId]);
-
-  // Get the first signed URL once we know the viewer is authenticated.
-  useEffect(() => {
-    if (signedIn) fetchSignedUrl();
-  }, [signedIn, fetchSignedUrl]);
 
   // Load the listener's current pocket balance up front.
   useEffect(() => {
@@ -169,27 +143,24 @@ export function StreamingAudioPlayer({
 
   const handlePlayingChange = useCallback(
     (playing: boolean) => {
-      if (playing) {
-        // Refresh a near-expired signed URL when (re)starting playback.
-        const age = Date.now() - urlMintedAtRef.current;
-        if (age > (urlTtlRef.current - 10) * 1000) fetchSignedUrl();
-        return;
-      }
+      if (playing) return;
       // Paused — settle completed minutes (paying listeners only).
       if (meter) heartbeat(false);
     },
-    [meter, heartbeat, fetchSignedUrl]
+    [meter, heartbeat]
   );
 
-  // An expired signed URL surfaces as a media error mid-playback — re-sign and
-  // let AudioPlayer resume from where it was (with a short cooldown vs loops).
+  // A media error for a metered listener means the proxy stopped serving bytes
+  // (pocket empty → 402). Settle via the heartbeat so the empty-pocket state and
+  // the top-up prompt surface; a short cooldown guards against error loops.
   const handleAudioError = useCallback(() => {
-    if (!signedIn) return;
+    if (!meter) return;
     const now = Date.now();
-    if (now - lastErrorRefreshRef.current < 3000) return;
-    lastErrorRefreshRef.current = now;
-    fetchSignedUrl();
-  }, [signedIn, fetchSignedUrl]);
+    if (now - lastErrorRef.current < 3000) return;
+    lastErrorRef.current = now;
+    setBlocked(true);
+    heartbeat(false);
+  }, [meter, heartbeat]);
 
   // Final settle on navigation away / unmount (paying listeners only).
   useEffect(() => {
@@ -253,20 +224,14 @@ export function StreamingAudioPlayer({
 
   return (
     <div className="space-y-3">
-      {audioSrc ? (
-        <AudioPlayer
-          src={audioSrc}
-          title={title}
-          onSecondsPlayed={handleSeconds}
-          onPlayingChange={handlePlayingChange}
-          onError={handleAudioError}
-          blocked={blocked}
-        />
-      ) : (
-        <div className="flex h-[120px] items-center justify-center rounded-2xl border-[1.5px] border-border bg-gradient-to-br from-[#EAF3FE] to-[#F3EDFE]">
-          <Loader2 className="h-5 w-5 animate-spin text-[var(--blue-deep)]" />
-        </div>
-      )}
+      <AudioPlayer
+        src={audioSrc}
+        title={title}
+        onSecondsPlayed={handleSeconds}
+        onPlayingChange={handlePlayingChange}
+        onError={handleAudioError}
+        blocked={blocked}
+      />
 
       {free ? (
         <p className="rounded-2xl bg-secondary/30 p-3 text-xs font-bold text-secondary-foreground">

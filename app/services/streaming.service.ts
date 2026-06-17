@@ -138,13 +138,50 @@ export const createStreamingService = (supabase: SupabaseClient) => ({
     return data ?? [];
   },
 
-  /** Reuse the listener's ACTIVE session for a work, or open a new one. */
-  async startSession(
+  /**
+   * Who listens free, and why. Owners and the work's contributors are "creator"
+   * free; anyone holding a non-FAILED/REFUNDED license is "licensed" free.
+   * Single source of truth shared by the streaming heartbeat and the audio
+   * proxy so byte access and billing always agree. `ownerProfileId` is passed in
+   * because both callers have already loaded the work row.
+   */
+  async getEntitlement(
     workId: string,
-    listenerProfileId: string,
-    listenerWalletId: string
-  ): Promise<StreamSession> {
-    const { data: existing } = await supabase
+    ownerProfileId: string,
+    profileId: string,
+    walletId: string | null
+  ): Promise<{ free: boolean; reason: "creator" | "licensed" | null }> {
+    if (ownerProfileId === profileId) return { free: true, reason: "creator" };
+
+    const contribOr = walletId
+      ? `profile_id.eq.${profileId},wallet_id.eq.${walletId}`
+      : `profile_id.eq.${profileId}`;
+    const { data: contrib } = await supabase
+      .from("contributors")
+      .select("id")
+      .eq("work_id", workId)
+      .or(contribOr)
+      .limit(1);
+    if ((contrib?.length ?? 0) > 0) return { free: true, reason: "creator" };
+
+    const { data: license } = await supabase
+      .from("licenses")
+      .select("id")
+      .eq("work_id", workId)
+      .eq("buyer_profile_id", profileId)
+      .not("status", "in", "(FAILED,REFUNDED)")
+      .limit(1);
+    if ((license?.length ?? 0) > 0) return { free: true, reason: "licensed" };
+
+    return { free: false, reason: null };
+  },
+
+  /** The listener's most recent ACTIVE session for a work, or null. */
+  async getActiveSession(
+    workId: string,
+    listenerProfileId: string
+  ): Promise<StreamSession | null> {
+    const { data } = await supabase
       .from("stream_sessions")
       .select("*")
       .eq("work_id", workId)
@@ -153,7 +190,17 @@ export const createStreamingService = (supabase: SupabaseClient) => ({
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (existing) return existing as StreamSession;
+    return (data as StreamSession) ?? null;
+  },
+
+  /** Reuse the listener's ACTIVE session for a work, or open a new one. */
+  async startSession(
+    workId: string,
+    listenerProfileId: string,
+    listenerWalletId: string
+  ): Promise<StreamSession> {
+    const existing = await this.getActiveSession(workId, listenerProfileId);
+    if (existing) return existing;
 
     const { data, error } = await supabase
       .from("stream_sessions")

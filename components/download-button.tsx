@@ -18,16 +18,17 @@
 
 "use client";
 
-import { useState } from "react";
-import { toast } from "sonner";
-import { Download, Loader2 } from "lucide-react";
+import { Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const AUDIO_EXT = ["mp3", "wav", "ogg", "flac"];
 
 /**
- * Download a licensed work's file. Audio lives in the private bucket, so we mint
- * a short-lived signed download URL; other file types use their public URL.
+ * Download a licensed work's file. Audio lives in the private bucket and is
+ * served through the same-origin proxy /api/works/[id]/audio?download=1, which
+ * cookie-authenticates the caller, checks entitlement (owner/contributor/
+ * licensee → 403 otherwise), and streams the bytes with an attachment
+ * disposition. Other file types are served directly from their public URL.
  */
 export function DownloadButton({
   workId,
@@ -36,45 +37,16 @@ export function DownloadButton({
   workId: string;
   fileUrl: string;
 }) {
-  const [busy, setBusy] = useState(false);
-
-  async function download() {
-    setBusy(true);
-    try {
-      const ext = fileUrl.split(".").pop()?.toLowerCase() ?? "";
-      let url = fileUrl;
-      if (AUDIO_EXT.includes(ext)) {
-        const res = await fetch(`/api/works/${workId}/audio-url?download=1`);
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "Could not get download link");
-        url = json.url;
-      }
-      const a = document.createElement("a");
-      a.href = url;
-      a.target = "_blank";
-      a.rel = "noreferrer";
-      a.download = "";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    } catch (err: any) {
-      toast.error(err.message || "Download failed");
-    } finally {
-      setBusy(false);
-    }
-  }
+  const ext = fileUrl.split(".").pop()?.toLowerCase() ?? "";
+  const href = AUDIO_EXT.includes(ext)
+    ? `/api/works/${workId}/audio?download=1`
+    : fileUrl;
 
   return (
-    <Button onClick={download} disabled={busy} variant="outline" className="w-full">
-      {busy ? (
-        <>
-          <Loader2 className="h-4 w-4 animate-spin" /> preparing…
-        </>
-      ) : (
-        <>
-          <Download className="h-4 w-4" /> download
-        </>
-      )}
+    <Button asChild variant="outline" className="w-full">
+      <a href={href} download rel="noreferrer">
+        <Download className="h-4 w-4" /> download
+      </a>
     </Button>
   );
 }
