@@ -38,7 +38,7 @@ import {
   AiRosterItem,
 } from "@/components/contributor-split-editor";
 import { StemCloud } from "@/components/kawaii/stem-cloud";
-import { uploadWorkFile } from "@/lib/utils/client-upload";
+import { uploadWorkFile, WorkMatch } from "@/lib/utils/client-upload";
 import { scaleUpstreamSplits, UPSTREAM_SHARE_PCT } from "@/lib/utils/royalty";
 import { WorkType } from "@/types/royalty";
 
@@ -74,6 +74,11 @@ export function RegisterWorkForm({
   const [submitting, setSubmitting] = useState(false);
   const [step, setStep] = useState("");
   const [aiAgents, setAiAgents] = useState<AiRosterItem[]>([]);
+  const [ownershipAffirmed, setOwnershipAffirmed] = useState(false);
+  // Set when an upload strongly matched an existing work — forces the
+  // attribution dialog before the work can be published.
+  const [pendingMatch, setPendingMatch] = useState<WorkMatch | null>(null);
+  const [draftWorkId, setDraftWorkId] = useState<string | null>(null);
 
   // Load the user's reusable AI agents for the picker.
   useEffect(() => {
@@ -157,10 +162,109 @@ export function RegisterWorkForm({
   const total = rows.reduce((acc, r) => acc + (Number(r.splitPct) || 0), 0);
   const splitsValid = Math.abs(total - 100) < 0.01;
 
+  /**
+   * Resolve the editor rows into the contributor payload, minting/looking up AI
+   * agents as needed. Reads `rows` at call time so it reflects any upstream rows
+   * injected by syncUpstream after attribution.
+   */
+  async function resolveContributors() {
+    const contributors = [];
+    for (const r of rows) {
+      if (r.locked) {
+        // Upstream provenance contributor — paid by its existing wallet id.
+        contributors.push({
+          contributor_type: r.type,
+          display_name: r.displayName,
+          split_pct: r.splitPct,
+          wallet_id: r.walletId,
+        });
+        continue;
+      }
+      if (r.type === "ai") {
+        const existing = aiAgents.find((a) => a.id === r.aiWalletId);
+        if (existing) {
+          contributors.push({
+            contributor_type: "ai",
+            display_name: existing.display_name,
+            split_pct: r.splitPct,
+            wallet_id: existing.id,
+            erc8004_agent_id: existing.erc8004_agent_id,
+            erc8004_tx_hash: existing.erc8004_tx_hash,
+          });
+        } else {
+          setStep(`Summoning ${r.displayName}…`);
+          const aiRes = await fetch("/api/ai-agents", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              displayName: r.displayName,
+              origin: r.origin,
+              capabilities: r.capabilities,
+            }),
+          });
+          const aiJson = await aiRes.json();
+          if (!aiRes.ok) throw new Error(aiJson.error || "AI agent failed");
+          const agent = aiJson.agent;
+          contributors.push({
+            contributor_type: "ai",
+            display_name: agent.display_name,
+            split_pct: r.splitPct,
+            wallet_id: agent.id,
+            erc8004_agent_id: agent.erc8004_agent_id,
+            erc8004_tx_hash: agent.erc8004_tx_hash,
+          });
+        }
+      } else if (r.isOwner) {
+        contributors.push({
+          contributor_type: "human",
+          display_name: r.displayName,
+          split_pct: r.splitPct,
+          wallet_id: ownerWalletId,
+        });
+      } else {
+        contributors.push({
+          contributor_type: "human",
+          display_name: r.displayName,
+          split_pct: r.splitPct,
+          email: r.email,
+        });
+      }
+    }
+    return contributors;
+  }
+
+  /** Save contributors, then run the publish gate (DRAFT → ACTIVE). */
+  async function saveAndPublish(workId: string, parentForPublish: string | null) {
+    setStep("Saving contributors…");
+    const contributors = await resolveContributors();
+    const contribRes = await fetch(`/api/works/${workId}/contributors`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contributors }),
+    });
+    const contribJson = await contribRes.json();
+    if (!contribRes.ok) throw new Error(contribJson.error || "Failed to save contributors");
+
+    setStep("Publishing…");
+    const pubRes = await fetch(`/api/works/${workId}/publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ parentWorkId: parentForPublish }),
+    });
+    const pubJson = await pubRes.json();
+    if (!pubRes.ok) throw new Error(pubJson.error || "Could not publish");
+
+    toast.success("Work published!");
+    router.push(`/dashboard/works/${workId}`);
+    router.refresh();
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim()) return toast.error("Title is required");
     if (!file) return toast.error("Please upload a work file — it's required to license the work");
+    if (!ownershipAffirmed)
+      return toast.error("Please affirm you own or have the rights to this work");
     if (!splitsValid) return toast.error("Splits must total 100%");
     for (const r of rows) {
       if (r.locked) continue; // upstream provenance rows are pre-resolved
@@ -172,7 +276,7 @@ export function RegisterWorkForm({
 
     setSubmitting(true);
     try {
-      // 1. Create the work.
+      // 1. Create the work (starts as DRAFT).
       setStep("Registering work…");
       const workRes = await fetch("/api/works", {
         method: "POST",
@@ -183,102 +287,62 @@ export function RegisterWorkForm({
           workType,
           parentWorkId: parentWorkId || null,
           licensePrice: parseFloat(licensePrice) || 0,
+          ownershipAffirmed,
         }),
       });
       const workJson = await workRes.json();
       if (!workRes.ok) throw new Error(workJson.error || "Failed to create work");
       const workId = workJson.work.id as string;
 
-      // 2. Upload the file — straight to Storage from the browser (bypasses the
-      //    serverless body limit), then finalize.
-      if (file) {
-        setStep("Uploading file…");
-        await uploadWorkFile(workId, file);
+      // 2. Upload the file directly to Storage, finalize, and run the
+      //    originality check (the finalize response carries any `match`).
+      setStep("Uploading file…");
+      const { match } = await uploadWorkFile(workId, file);
+
+      // 3. If it matched an existing work the user hasn't already attributed,
+      //    pause and force the attribution decision via the dialog.
+      if (match && parentWorkId !== match.workId) {
+        setDraftWorkId(workId);
+        setPendingMatch(match);
+        setParentWorkId(match.workId); // triggers syncUpstream → 20% upstream rows
+        setSubmitting(false);
+        setStep("");
+        return;
       }
 
-      // 3. Resolve AI contributors — reuse an existing agent, or mint a new one.
-      const contributors = [];
-      for (const r of rows) {
-        if (r.locked) {
-          // Upstream provenance contributor — paid by its existing wallet id.
-          contributors.push({
-            contributor_type: r.type,
-            display_name: r.displayName,
-            split_pct: r.splitPct,
-            wallet_id: r.walletId,
-          });
-          continue;
-        }
-        if (r.type === "ai") {
-          const existing = aiAgents.find((a) => a.id === r.aiWalletId);
-          if (existing) {
-            contributors.push({
-              contributor_type: "ai",
-              display_name: existing.display_name,
-              split_pct: r.splitPct,
-              wallet_id: existing.id,
-              erc8004_agent_id: existing.erc8004_agent_id,
-              erc8004_tx_hash: existing.erc8004_tx_hash,
-            });
-          } else {
-            setStep(`Summoning ${r.displayName}…`);
-            const aiRes = await fetch("/api/ai-agents", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                displayName: r.displayName,
-                origin: r.origin,
-                capabilities: r.capabilities,
-              }),
-            });
-            const aiJson = await aiRes.json();
-            if (!aiRes.ok) throw new Error(aiJson.error || "AI agent failed");
-            const agent = aiJson.agent;
-            contributors.push({
-              contributor_type: "ai",
-              display_name: agent.display_name,
-              split_pct: r.splitPct,
-              wallet_id: agent.id,
-              erc8004_agent_id: agent.erc8004_agent_id,
-              erc8004_tx_hash: agent.erc8004_tx_hash,
-            });
-          }
-        } else if (r.isOwner) {
-          contributors.push({
-            contributor_type: "human",
-            display_name: r.displayName,
-            split_pct: r.splitPct,
-            wallet_id: ownerWalletId,
-          });
-        } else {
-          contributors.push({
-            contributor_type: "human",
-            display_name: r.displayName,
-            split_pct: r.splitPct,
-            email: r.email,
-          });
-        }
-      }
-
-      // 4. Attach contributors.
-      setStep("Saving contributors…");
-      const contribRes = await fetch(`/api/works/${workId}/contributors`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contributors }),
-      });
-      const contribJson = await contribRes.json();
-      if (!contribRes.ok) {
-        throw new Error(contribJson.error || "Failed to save contributors");
-      }
-
-      toast.success("Work registered!");
-      router.push(`/dashboard/works/${workId}`);
-      router.refresh();
+      // 4. No match (or already attributed): publish straight away.
+      await saveAndPublish(workId, parentWorkId || null);
     } catch (err: any) {
       toast.error(err.message || "Something went wrong");
       setSubmitting(false);
       setStep("");
+    }
+  }
+
+  /** Dialog action: accept attribution and publish as a remix of the match. */
+  async function finishAsRemix() {
+    if (!draftWorkId || !pendingMatch) return;
+    setSubmitting(true);
+    try {
+      await saveAndPublish(draftWorkId, pendingMatch.workId);
+      setPendingMatch(null);
+      setDraftWorkId(null);
+    } catch (err: any) {
+      toast.error(err.message || "Could not publish remix");
+      setSubmitting(false);
+      setStep("");
+    }
+  }
+
+  /** Dialog action: decline — the work stays an unlisted draft. */
+  function cancelAttribution() {
+    const id = draftWorkId;
+    setPendingMatch(null);
+    setDraftWorkId(null);
+    toast.info("Saved as a draft — it won't be listed until it's attributed.");
+    if (id) {
+      router.push(`/dashboard/works/${id}`);
+      router.refresh();
     }
   }
 
@@ -384,10 +448,23 @@ export function RegisterWorkForm({
 
           <ContributorSplitEditor rows={rows} onChange={setRows} aiAgents={aiAgents} />
 
+          <label className="flex items-start gap-2 rounded-2xl border-[1.5px] border-border bg-card/70 p-3 text-sm font-semibold">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 accent-[var(--blue-deep)]"
+              checked={ownershipAffirmed}
+              onChange={(e) => setOwnershipAffirmed(e.target.checked)}
+            />
+            <span>
+              I created this work or have the rights to license it. If it remixes
+              another stem, I&apos;ll credit it as the source.
+            </span>
+          </label>
+
           <Button
             type="submit"
             className="w-full"
-            disabled={submitting || !splitsValid}
+            disabled={submitting || !splitsValid || !ownershipAffirmed}
           >
             {submitting ? (
               <>
@@ -400,6 +477,48 @@ export function RegisterWorkForm({
           </Button>
         </form>
       </CardContent>
+
+      {pendingMatch && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md space-y-4 rounded-2xl border-[1.5px] border-border bg-card p-6 shadow-[var(--shadow-cloud-sm)]">
+            <h3 className="text-lg font-extrabold">This sounds like an existing stem 🎧</h3>
+            <p className="text-sm font-semibold text-muted-foreground">
+              Your upload closely matches{" "}
+              <span className="font-extrabold text-foreground">
+                “{pendingMatch.title}”
+              </span>{" "}
+              already on stem. To publish, license it as a remix —{" "}
+              <span className="font-extrabold">{UPSTREAM_SHARE_PCT}%</span> of every
+              license goes upstream to the original creator (locked rows are added to
+              your splits). You keep the remaining {100 - UPSTREAM_SHARE_PCT}%.
+            </p>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button
+                className="flex-1"
+                onClick={finishAsRemix}
+                disabled={submitting || !splitsValid}
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    {step || "Publishing…"}
+                  </>
+                ) : (
+                  "Make it a remix & publish"
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={cancelAttribution}
+                disabled={submitting}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </Card>
   );
 }

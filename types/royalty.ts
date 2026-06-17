@@ -51,7 +51,17 @@ export interface Work {
   duration_seconds: number | null;
   parent_work_id: string | null;
   license_price: number;
+  /** DRAFT | ACTIVE | PENDING_ATTRIBUTION | BLOCKED */
   status: string;
+  /** Originality: exact content hash + acoustic fingerprint computed at upload. */
+  file_sha256?: string | null;
+  audio_fingerprint?: number[] | null;
+  fingerprint_duration?: number | null;
+  /** A catalog work this upload strongly matched; must be attributed to publish. */
+  suspected_parent_work_id?: string | null;
+  match_score?: number | null;
+  ownership_affirmed_at?: string | null;
+  terms_version?: string | null;
   created_at: string;
   updated_at: string;
 }

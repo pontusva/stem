@@ -45,10 +45,16 @@ export function readAudioDuration(file: File): Promise<number | null> {
  *   3. upload the bytes directly to Storage,
  *   4. finalize (record path + URL + duration on the work).
  */
+export interface WorkMatch {
+  workId: string;
+  title: string;
+  score: number;
+}
+
 export async function uploadWorkFile(
   workId: string,
   file: File
-): Promise<{ durationSeconds: number | null }> {
+): Promise<{ durationSeconds: number | null; match: WorkMatch | null }> {
   const durationSeconds = await readAudioDuration(file);
   const contentType = contentTypeForFile(file.name, file.type);
 
@@ -74,5 +80,7 @@ export async function uploadWorkFile(
   const fin = await finRes.json();
   if (!finRes.ok) throw new Error(fin.error || "Could not save file");
 
-  return { durationSeconds };
+  // The finalize step runs the originality check; `match` is set when the upload
+  // strongly matched an existing work and must be attributed before publishing.
+  return { durationSeconds, match: (fin.match as WorkMatch | null) ?? null };
 }

@@ -52,9 +52,11 @@ export default async function NewWorkPage({
     );
   }
 
+  // Only published works can be remixed (named as a parent).
   const { data: works } = await supabase
     .from("works")
     .select("id, title")
+    .eq("status", "ACTIVE")
     .order("created_at", { ascending: false });
 
   const ownerName = profile?.full_name || profile?.name || user.email || "You";

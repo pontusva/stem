@@ -34,6 +34,8 @@ export const createWorksService = (supabase: SupabaseClient) => ({
     licensePrice?: number;
     filePath?: string | null;
     fileUrl?: string | null;
+    ownershipAffirmedAt?: string | null;
+    termsVersion?: string | null;
   }): Promise<Work> {
     const { data, error } = await supabase
       .from("works")
@@ -46,12 +48,48 @@ export const createWorksService = (supabase: SupabaseClient) => ({
         license_price: params.licensePrice ?? 0,
         file_path: params.filePath ?? null,
         file_url: params.fileUrl ?? null,
+        // New works start as DRAFT and only go ACTIVE via the publish gate, after
+        // the originality check (and forced attribution, if it matched).
+        status: "DRAFT",
+        ownership_affirmed_at: params.ownershipAffirmedAt ?? null,
+        terms_version: params.termsVersion ?? null,
       })
       .select()
       .single();
 
     if (error) throw new Error(`Failed to create work: ${error.message}`);
     return data as Work;
+  },
+
+  /**
+   * Record originality data computed at upload time, and (when a strong match
+   * was found and not already attributed) hold the work in PENDING_ATTRIBUTION.
+   */
+  async updateOriginality(
+    workId: string,
+    fields: {
+      fileSha256?: string | null;
+      audioFingerprint?: number[] | null;
+      fingerprintDuration?: number | null;
+      status?: string;
+      suspectedParentWorkId?: string | null;
+      matchScore?: number | null;
+    }
+  ): Promise<void> {
+    const update: Record<string, unknown> = {};
+    if (fields.fileSha256 !== undefined) update.file_sha256 = fields.fileSha256;
+    if (fields.audioFingerprint !== undefined)
+      update.audio_fingerprint = fields.audioFingerprint;
+    if (fields.fingerprintDuration !== undefined)
+      update.fingerprint_duration = fields.fingerprintDuration;
+    if (fields.status !== undefined) update.status = fields.status;
+    if (fields.suspectedParentWorkId !== undefined)
+      update.suspected_parent_work_id = fields.suspectedParentWorkId;
+    if (fields.matchScore !== undefined) update.match_score = fields.matchScore;
+    if (Object.keys(update).length === 0) return;
+
+    const { error } = await supabase.from("works").update(update).eq("id", workId);
+    if (error) throw new Error(`Failed to update originality: ${error.message}`);
   },
 
   async updateWorkFile(
@@ -75,11 +113,18 @@ export const createWorksService = (supabase: SupabaseClient) => ({
     if (error) throw new Error(`Failed to update work file: ${error.message}`);
   },
 
-  async listWorks(): Promise<WorkWithContributors[]> {
-    const { data, error } = await supabase
+  /**
+   * @param opts.publicOnly when true, only ACTIVE works (the public catalog).
+   *   Omit it for owner/dashboard contexts that must also see DRAFT /
+   *   PENDING_ATTRIBUTION / BLOCKED works.
+   */
+  async listWorks(opts?: { publicOnly?: boolean }): Promise<WorkWithContributors[]> {
+    let query = supabase
       .from("works")
       .select(`*, contributors:contributors!contributors_work_id_fkey ( ${CONTRIBUTOR_SELECT} )`)
       .order("created_at", { ascending: false });
+    if (opts?.publicOnly) query = query.eq("status", "ACTIVE");
+    const { data, error } = await query;
 
     if (error) throw new Error(`Failed to list works: ${error.message}`);
     const works = (data ?? []) as unknown as WorkWithContributors[];

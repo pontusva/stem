@@ -33,6 +33,7 @@ import { ShareWorkButton } from "@/components/share-work-button";
 import { WorkFileUpload } from "@/components/work-file-upload";
 import { StreamingAudioPlayer } from "@/components/streaming-audio-player";
 import { DownloadButton } from "@/components/download-button";
+import { ReportButton } from "@/components/report-button";
 import { computeSplitAmounts, formatUsdc, UPSTREAM_SHARE_PCT } from "@/lib/utils/royalty";
 
 export const dynamic = "force-dynamic";
@@ -196,14 +197,17 @@ export default async function WorkDetailPage({
             </span>
           )}
         </div>
-        {user && (isOwner || alreadyLicensed) && (
-          <Button asChild variant="outline">
-            <Link href={`/dashboard/works/new?parent=${work.id}`}>
-              <GitBranch className="h-4 w-4" />
-              register derivative
-            </Link>
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {user && (isOwner || alreadyLicensed) && (
+            <Button asChild variant="outline">
+              <Link href={`/dashboard/works/new?parent=${work.id}`}>
+                <GitBranch className="h-4 w-4" />
+                register derivative
+              </Link>
+            </Button>
+          )}
+          {user && !isOwner && <ReportButton workId={work.id} />}
+        </div>
       </div>
 
       {provenance.length > 0 && (

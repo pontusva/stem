@@ -35,7 +35,7 @@ export default async function ExplorePage() {
   } = await auth.auth.getUser();
 
   const service = createSupabaseServiceClient();
-  const works = await createWorksService(service).listWorks();
+  const works = await createWorksService(service).listWorks({ publicOnly: true });
 
   return (
     <div className="space-y-8">

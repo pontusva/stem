@@ -27,12 +27,15 @@ export const dynamic = "force-dynamic";
 
 const VALID_TYPES: WorkType[] = ["music", "art", "writing"];
 
+/** Bump when the upload affirmation copy changes, so acceptances are versioned. */
+const TERMS_VERSION = "2026-06-17";
+
 /** GET /api/works — public catalog of all registered works. */
 export async function GET() {
   try {
     const service = createSupabaseServiceClient();
     const worksService = createWorksService(service);
-    const works = await worksService.listWorks();
+    const works = await worksService.listWorks({ publicOnly: true });
     return NextResponse.json({ works });
   } catch (error: any) {
     return NextResponse.json(
@@ -52,10 +55,19 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { title, description, workType, parentWorkId, licensePrice } = body;
+    const { title, description, workType, parentWorkId, licensePrice, ownershipAffirmed } =
+      body;
 
     if (!title || typeof title !== "string") {
       return NextResponse.json({ error: "title is required" }, { status: 400 });
+    }
+    // Uploader must affirm they own / have the rights to the work (the cheap
+    // deterrent + legal basis for takedowns). Enforced server-side too.
+    if (ownershipAffirmed !== true) {
+      return NextResponse.json(
+        { error: "You must affirm you own or have the rights to this work" },
+        { status: 400 }
+      );
     }
     if (!VALID_TYPES.includes(workType)) {
       return NextResponse.json(
@@ -82,6 +94,8 @@ export async function POST(req: NextRequest) {
       workType,
       parentWorkId: parentWorkId || null,
       licensePrice: price,
+      ownershipAffirmedAt: new Date().toISOString(),
+      termsVersion: TERMS_VERSION,
     });
 
     return NextResponse.json({ work }, { status: 201 });

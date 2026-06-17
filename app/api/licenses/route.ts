@@ -101,12 +101,20 @@ export async function POST(req: NextRequest) {
     const { data: work } = await service
       .from("works")
       .select(
-        "id, title, description, work_type, file_path, file_url, duration_seconds, license_price, owner_profile_id"
+        "id, title, description, work_type, file_path, file_url, duration_seconds, license_price, owner_profile_id, status"
       )
       .eq("id", workId)
       .single();
     if (!work) {
       return NextResponse.json({ error: "Work not found" }, { status: 404 });
+    }
+    // Only published works can be licensed — not drafts, unattributed re-uploads
+    // (PENDING_ATTRIBUTION), or taken-down works (BLOCKED).
+    if (work.status !== "ACTIVE") {
+      return NextResponse.json(
+        { error: "This work isn't available for licensing." },
+        { status: 409 }
+      );
     }
 
     // You can't buy a license to your own work — the fee would just round-trip

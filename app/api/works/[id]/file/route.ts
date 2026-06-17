@@ -20,8 +20,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server-client";
 import { createSupabaseServiceClient } from "@/lib/supabase/service-client";
 import { createWorksService } from "@/app/services/works.service";
+import { createFingerprintService } from "@/app/services/fingerprint.service";
 import { getCurrentUser } from "@/lib/utils/current-user";
-import { bucketForFile, isAudioFile } from "@/lib/utils/work-files";
+import { bucketForFile, isAudioFile, extOf } from "@/lib/utils/work-files";
 
 export const dynamic = "force-dynamic";
 
@@ -49,7 +50,7 @@ export async function POST(
 
   const { data: work } = await service
     .from("works")
-    .select("id, owner_profile_id")
+    .select("id, owner_profile_id, parent_work_id")
     .eq("id", params.id)
     .single();
   if (!work) {
@@ -94,8 +95,100 @@ export async function POST(
 
   await worksService.updateWorkFile(params.id, path, pub.publicUrl, duration);
 
+  // ----- Originality gate -----
+  // Compute a content hash (+ acoustic fingerprint for audio) and compare with
+  // the catalog. A strong match holds the work in PENDING_ATTRIBUTION so the
+  // owner is forced to declare it as a remix (→ 20% upstream) before publishing.
+  let match: { workId: string; title: string; score: number } | null = null;
+  const fpService = createFingerprintService(service);
+  if (fpService.enabled()) {
+    try {
+      const { data: blob } = await service.storage.from(bucket).download(path);
+      if (blob) {
+        const buf = Buffer.from(await blob.arrayBuffer());
+        const sha256 = fpService.sha256(buf);
+
+        let fingerprint: number[] | null = null;
+        let fpDuration: number | null = null;
+        let matched: { workId: string; title: string; ownerProfileId: string; score: number } | null =
+          null;
+
+        // 1. Exact-duplicate fast path (any file type).
+        const { data: hashDup } = await service
+          .from("works")
+          .select("id, title, owner_profile_id")
+          .eq("file_sha256", sha256)
+          .in("status", ["ACTIVE", "PENDING_ATTRIBUTION"])
+          .neq("id", params.id)
+          .limit(1)
+          .maybeSingle();
+        if (hashDup) {
+          matched = {
+            workId: hashDup.id,
+            title: hashDup.title,
+            ownerProfileId: hashDup.owner_profile_id,
+            score: 1,
+          };
+        }
+
+        // 2. Acoustic fingerprint (audio only) — robust to re-encoding/trimming.
+        if (audio) {
+          const fp = await fpService.fingerprint(buf, extOf(path));
+          if (fp) {
+            fingerprint = fp.fingerprint;
+            fpDuration = Math.round(fp.duration);
+            if (!matched) {
+              matched = await fpService.findStrongMatch(
+                fp.fingerprint,
+                fp.duration,
+                params.id
+              );
+            }
+          }
+        }
+
+        // An honest remixer who already declared the matched work (directly or up
+        // its provenance chain) as parent isn't plagiarising — let it through.
+        let alreadyAttributed = false;
+        if (matched) {
+          if (work.parent_work_id === matched.workId) {
+            alreadyAttributed = true;
+          } else if (work.parent_work_id) {
+            const chain = await worksService.getProvenanceChain(params.id);
+            alreadyAttributed = chain.some((w) => w.id === matched!.workId);
+          }
+        }
+
+        await worksService.updateOriginality(params.id, {
+          fileSha256: sha256,
+          audioFingerprint: fingerprint,
+          fingerprintDuration: fpDuration,
+          ...(matched && !alreadyAttributed
+            ? {
+                status: "PENDING_ATTRIBUTION",
+                suspectedParentWorkId: matched.workId,
+                matchScore: matched.score,
+              }
+            : {}),
+        });
+
+        if (matched && !alreadyAttributed) {
+          match = { workId: matched.workId, title: matched.title, score: matched.score };
+        }
+      }
+    } catch (err: any) {
+      // Never block an upload on a detector error — log and continue (fail-open).
+      console.warn(`[originality] check failed (fail-open): ${err?.message ?? err}`);
+    }
+  }
+
   return NextResponse.json(
-    { filePath: path, fileUrl: pub.publicUrl, durationSeconds: duration ?? null },
+    {
+      filePath: path,
+      fileUrl: pub.publicUrl,
+      durationSeconds: duration ?? null,
+      match,
+    },
     { status: 201 }
   );
 }
