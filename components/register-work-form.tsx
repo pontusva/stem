@@ -51,6 +51,8 @@ interface Props {
   ownerName: string;
   ownerWalletId: string;
   parentWorks: ParentWorkOption[];
+  /** Works the uploader has licensed — suggested as parents (attribution nudge). */
+  licensedWorks?: ParentWorkOption[];
   initialParentId?: string;
 }
 
@@ -61,6 +63,7 @@ export function RegisterWorkForm({
   ownerName,
   ownerWalletId,
   parentWorks,
+  licensedWorks = [],
   initialParentId,
 }: Props) {
   const router = useRouter();
@@ -443,6 +446,35 @@ export function RegisterWorkForm({
               of every license back to{" "}
               {parentTitle ? `“${parentTitle}”` : "the original"}&apos;s creators
               (locked rows below). You split the remaining {100 - UPSTREAM_SHARE_PCT}%.
+            </div>
+          )}
+
+          {/* Attribution nudge: if the uploader licensed stems, suggest crediting
+              one as the source — covers remixes too transformed to auto-detect. */}
+          {licensedWorks.some((w) => w.id !== parentWorkId) && (
+            <div className="space-y-2 rounded-2xl border-[1.5px] border-[var(--blue-deep)]/40 bg-[#EAF3FE]/60 p-3 text-sm">
+              <p className="font-bold">
+                🎚️ Is this a remix of a stem you licensed?
+              </p>
+              <p className="font-semibold text-muted-foreground">
+                Crediting your source sends {UPSTREAM_SHARE_PCT}% of every license
+                to its creators — and your remix license requires it.
+              </p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                {licensedWorks
+                  .filter((w) => w.id !== parentWorkId)
+                  .map((w) => (
+                    <Button
+                      key={w.id}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setParentWorkId(w.id)}
+                    >
+                      It&apos;s a remix of “{w.title}”
+                    </Button>
+                  ))}
+              </div>
             </div>
           )}
 

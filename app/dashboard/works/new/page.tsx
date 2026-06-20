@@ -59,6 +59,23 @@ export default async function NewWorkPage({
     .eq("status", "ACTIVE")
     .order("created_at", { ascending: false });
 
+  // Works this user has licensed (download + remix rights). We surface these as
+  // suggested parents — the attribution nudge — since a remix that's transformed
+  // enough to dodge fingerprinting still has a license paper trail.
+  const { data: licenses } = await supabase
+    .from("licenses")
+    .select("work:works!licenses_work_id_fkey ( id, title, status )")
+    .eq("buyer_profile_id", profile?.id ?? "")
+    .not("status", "in", "(FAILED,REFUNDED,REJECTED)");
+  const licensedWorks = Array.from(
+    new Map(
+      (licenses ?? [])
+        .map((l: any) => l.work)
+        .filter((w: any) => w && w.status === "ACTIVE")
+        .map((w: any) => [w.id, { id: w.id, title: w.title }])
+    ).values()
+  );
+
   const ownerName = profile?.full_name || profile?.name || user.email || "You";
 
   return (
@@ -68,6 +85,7 @@ export default async function NewWorkPage({
         ownerName={ownerName}
         ownerWalletId={wallet.id}
         parentWorks={works ?? []}
+        licensedWorks={licensedWorks}
         initialParentId={searchParams?.parent}
       />
     </div>
